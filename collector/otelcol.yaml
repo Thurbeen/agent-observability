@@ -1,0 +1,39 @@
+# OpenTelemetry Collector for Fleet v2.
+#
+# Fleet speaks OTLP over HTTP with protobuf only, and has no TLS client, so
+# the collector listens on plain HTTP. Bind it to an address only trusted
+# hosts reach, or put authentication in front of it.
+#
+# Point Fleet at it where `fleet up` runs:
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://<collector>:4318
+#
+# Each exporter reads its endpoint from the environment, with the defaults
+# of the quick-start stack in quickstart/compose.yaml.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  # Prometheus 3 receives OTLP natively (--web.enable-otlp-receiver).
+  otlphttp/prometheus:
+    metrics_endpoint: ${env:PROMETHEUS_OTLP_ENDPOINT:-http://prometheus:9090/api/v1/otlp/v1/metrics}
+  otlphttp/tempo:
+    traces_endpoint: ${env:TEMPO_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
+  # Fleet v2.4 exports no logs. This pipeline serves other producers that
+  # send to the same collector, and Fleet if it ever exports logs.
+  otlphttp/loki:
+    logs_endpoint: ${env:LOKI_OTLP_ENDPOINT:-http://loki:3100/otlp/v1/logs}
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [otlphttp/prometheus]
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/tempo]
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp/loki]
