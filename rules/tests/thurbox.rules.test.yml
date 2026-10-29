@@ -1,0 +1,90 @@
+# Unit tests for rules/thurbox.rules.yml: promtool test rules rules/tests/thurbox.rules.test.yml
+rule_files:
+  - ../thurbox.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: healthy sessions raise nothing
+    interval: 1m
+    input_series:
+      - series: 'thurbox_sessions{job="thurbox",host_name="ws",agent="claude",backend="local-tmux",state="working"}'
+        values: "3x120"
+      - series: 'thurbox_sessions{job="thurbox",host_name="ws",agent="claude",backend="local-tmux",state="lost"}'
+        values: "0x120"
+      - series: 'thurbox_sessions{job="thurbox",host_name="ws",agent="claude",backend="local-tmux",state="blocked"}'
+        values: "0x30 1x20 0x70"
+    alert_rule_test:
+      - {eval_time: 110m, alertname: ThurboxSessionsLost, exp_alerts: []}
+      - {eval_time: 110m, alertname: ThurboxLaunchFailed, exp_alerts: []}
+      - {eval_time: 110m, alertname: ThurboxHostUnreachable, exp_alerts: []}
+      - {eval_time: 45m, alertname: ThurboxWaitingOnHuman, exp_alerts: []}
+
+  - name: a lost session, counted per session
+    interval: 1m
+    input_series:
+      # per_session = true: one series per session, summed by the recording rule.
+      - series: 'thurbox_sessions{job="thurbox",host_name="ws",agent="codex",backend="local-tmux",state="lost",thurbox_session_id="a"}'
+        values: "0x10 1x30"
+      - series: 'thurbox_sessions{job="thurbox",host_name="ws",agent="codex",backend="local-tmux",state="lost",thurbox_session_id="b"}'
+        values: "0x20 1x20"
+    alert_rule_test:
+      - {eval_time: 14m, alertname: ThurboxSessionsLost, exp_alerts: []}
+      - eval_time: 30m
+        alertname: ThurboxSessionsLost
+        exp_alerts:
+          - exp_labels: {severity: warning, job: thurbox, host_name: ws, agent: codex, backend: local-tmux, state: lost}
+            exp_annotations:
+              summary: "2 codex session(s) lost on local-tmux"
+              description: "A session's pane went with nobody asking, or its relaunches gave up. It waits for a restart."
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#thurboxsessionslost
+
+  - name: a failed launch that is relaunched
+    interval: 1m
+    input_series:
+      - series: 'thurbox_sessions{job="thurbox",host_name="ws",agent="pi",backend="local-tmux",state="failed"}'
+        values: "0x5 1x10 0x20"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ThurboxLaunchFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, job: thurbox, host_name: ws, agent: pi, backend: local-tmux, state: failed}
+            exp_annotations:
+              summary: "1 pi session(s) failed to launch on local-tmux"
+              description: "The agent died before it reported anything. Nothing runs in the session."
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#thurboxlaunchfailed
+      - {eval_time: 25m, alertname: ThurboxLaunchFailed, exp_alerts: []}
+
+  - name: an unreachable host
+    interval: 1m
+    input_series:
+      - series: 'thurbox_sessions{job="thurbox",host_name="ws",agent="claude",backend="ssh:devbox",state="unreachable"}'
+        values: "0x5 2x30"
+      - series: 'thurbox_sessions{job="thurbox",host_name="ws",agent="codex",backend="ssh:devbox",state="unreachable"}'
+        values: "0x5 1x30"
+    alert_rule_test:
+      - {eval_time: 15m, alertname: ThurboxHostUnreachable, exp_alerts: []}
+      - eval_time: 25m
+        alertname: ThurboxHostUnreachable
+        exp_alerts:
+          - exp_labels: {severity: warning, job: thurbox, host_name: ws, backend: "ssh:devbox"}
+            exp_annotations:
+              summary: "Thurbox cannot reach ssh:devbox for 15 minutes"
+              description: "3 session(s) on that host show as unreachable placeholders."
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#thurboxhostunreachable
+
+  - name: sessions blocked for an hour
+    interval: 1m
+    input_series:
+      - series: 'thurbox_sessions{job="thurbox",host_name="ws",agent="claude",backend="local-tmux",state="blocked"}'
+        values: "1x90"
+    alert_rule_test:
+      - {eval_time: 50m, alertname: ThurboxWaitingOnHuman, exp_alerts: []}
+      - eval_time: 75m
+        alertname: ThurboxWaitingOnHuman
+        exp_alerts:
+          - exp_labels: {severity: info, job: thurbox, host_name: ws}
+            exp_annotations:
+              summary: "Thurbox sessions have waited on a human for an hour"
+              description: "1 session(s) are blocked on a permission prompt or a question."
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#thurboxwaitingonhuman

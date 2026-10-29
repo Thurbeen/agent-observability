@@ -1,0 +1,58 @@
+# Recording and alerting rules for Thurbox's own session metrics.
+#
+# Thurbox exports from `automation tick`, once a minute while sessions
+# exist. Its resource names service.name only, so `job` is always thurbox;
+# `host_name` (when Prometheus promotes host.name) tells machines apart.
+# The alerts read the thurbox.sessions gauge, which every tick reports for
+# every state word, down to zero. The counters are sparse (see
+# docs/thurbox.md), so no alert rests on one.
+# Runbook: docs/runbook.md, one section per alert.
+groups:
+  - name: thurbox.recording
+    interval: 1m
+    rules:
+      # Drops thurbox_session_id and custom labels when per_session is on.
+      - record: job_host_name_agent_backend_state:thurbox_sessions:sum
+        expr: sum by (job, host_name, agent, backend, state) (thurbox_sessions)
+
+  - name: thurbox.alerts
+    rules:
+      - alert: ThurboxSessionsLost
+        expr: job_host_name_agent_backend_state:thurbox_sessions:sum{state="lost"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} {{ $labels.agent }} session(s) lost on {{ $labels.backend }}"
+          description: "A session's pane went with nobody asking, or its relaunches gave up. It waits for a restart."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#thurboxsessionslost
+
+      - alert: ThurboxLaunchFailed
+        expr: job_host_name_agent_backend_state:thurbox_sessions:sum{state="failed"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} {{ $labels.agent }} session(s) failed to launch on {{ $labels.backend }}"
+          description: "The agent died before it reported anything. Nothing runs in the session."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#thurboxlaunchfailed
+
+      - alert: ThurboxHostUnreachable
+        expr: sum by (job, host_name, backend) (job_host_name_agent_backend_state:thurbox_sessions:sum{state="unreachable"}) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Thurbox cannot reach {{ $labels.backend }} for 15 minutes"
+          description: "{{ $value }} session(s) on that host show as unreachable placeholders."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#thurboxhostunreachable
+
+      - alert: ThurboxWaitingOnHuman
+        expr: sum by (job, host_name) (job_host_name_agent_backend_state:thurbox_sessions:sum{state="blocked"}) > 0
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Thurbox sessions have waited on a human for an hour"
+          description: "{{ $value }} session(s) are blocked on a permission prompt or a question."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#thurboxwaitingonhuman

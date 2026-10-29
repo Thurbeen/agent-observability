@@ -1,0 +1,47 @@
+# OpenTelemetry Collector for Fleet v2 and Thurbox.
+#
+# Fleet and Thurbox speak OTLP over HTTP with protobuf only, and have no TLS
+# client, so the collector listens on plain HTTP. Bind it to an address only
+# trusted hosts reach, or put authentication in front of it.
+#
+#   Fleet:   OTEL_EXPORTER_OTLP_ENDPOINT=http://<collector>:4318 fleet up
+#   Thurbox: [telemetry] enabled = true, endpoint = "http://<collector>:4318"
+#            in settings.toml
+#
+# Each exporter reads its endpoint from the environment, with the defaults
+# of the quick-start stack in quickstart/compose.yaml. Needs the contrib
+# distribution (otelcol-contrib) for the deltatocumulative processor.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Thurbox exports its metrics with delta temporality: each tick is a fresh
+  # process. Prometheus stores cumulative series. Fleet's cumulative metrics
+  # pass through unchanged.
+  deltatocumulative: {}
+
+exporters:
+  # Prometheus 3 receives OTLP natively (--web.enable-otlp-receiver).
+  otlphttp/prometheus:
+    metrics_endpoint: ${env:PROMETHEUS_OTLP_ENDPOINT:-http://prometheus:9090/api/v1/otlp/v1/metrics}
+  otlphttp/tempo:
+    traces_endpoint: ${env:TEMPO_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
+  # Thurbox's session events and diagnostic logs. Fleet v2.4 exports no logs.
+  otlphttp/loki:
+    logs_endpoint: ${env:LOKI_OTLP_ENDPOINT:-http://loki:3100/otlp/v1/logs}
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [deltatocumulative]
+      exporters: [otlphttp/prometheus]
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/tempo]
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp/loki]

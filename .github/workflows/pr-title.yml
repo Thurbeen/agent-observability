@@ -1,0 +1,31 @@
+# The pull request title becomes the squash commit on main, so it must be a
+# conventional commit. It runs on its own trigger so an edited title is
+# checked again without re-running CI.
+name: PR Title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    name: PR Title
+    runs-on: ubuntu-latest
+    steps:
+      # The title reaches the shell through the environment, never through
+      # `${{ }}` interpolation: it is untrusted text on a public repository.
+      - name: Check the PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9._/-]+\))?!?: [^ ].*$'
+          if printf '%s' "$PR_TITLE" | grep -Eq "$pattern"; then
+            echo "ok: $PR_TITLE"
+          else
+            echo "::error::PR title must be a conventional commit, such as 'feat(dashboards): add X'"
+            exit 1
+          fi

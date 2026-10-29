@@ -1,0 +1,13 @@
+# The dashboards land in Agents/Fleet and Agents/Thurbox: compose.yaml mounts
+# dashboards/fleet and dashboards/thurbox at those paths. Grafana's `folder`
+# and `folderUid` options make only top-level folders, so the nested folders
+# come from the directory structure.
+apiVersion: 1
+
+providers:
+  - name: agents
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: true

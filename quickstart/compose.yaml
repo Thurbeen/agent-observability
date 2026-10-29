@@ -1,0 +1,62 @@
+# A local stack to try the dashboards: Fleet and Thurbox -> collector ->
+# Prometheus, Tempo and Loki -> Grafana. Every port binds to 127.0.0.1 only, and Grafana
+# lets anyone on this machine in as an admin. Do not expose it. Set
+# COLLECTOR_PORT, PROMETHEUS_PORT, TEMPO_PORT, LOKI_PORT or GRAFANA_PORT to
+# move a port that is taken.
+#
+#   docker compose -f quickstart/compose.yaml up -d
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 fleet up
+#   open http://localhost:3000/dashboards
+name: agent-observability
+
+services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ../collector/otelcol.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:${COLLECTOR_PORT:-4318}:4318"
+    depends_on: [prometheus, tempo, loki]
+
+  prometheus:
+    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-otlp-receiver
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../rules:/etc/prometheus/rules:ro
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+
+  tempo:
+    image: grafana/tempo:3.1.1@sha256:64e2fbd56d9c2b3412a4b430a58ea59e91a670b1e75f920a0c702213ad145044
+    command: ["-target=all", "-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+
+  loki:
+    image: grafana/loki:3.7.9@sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+
+  grafana:
+    image: grafana/grafana:13.3.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../dashboards/fleet:/var/lib/grafana/dashboards/Agents/Fleet:ro
+      - ../dashboards/thurbox:/var/lib/grafana/dashboards/Agents/Thurbox:ro
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    depends_on: [prometheus, tempo, loki]
+
+volumes:
+  tempo-data:

@@ -1,0 +1,22 @@
+# Run with prek: `prek install`, then every commit runs these checks.
+repos:
+  - repo: local
+    hooks:
+      - id: dashboards
+        name: Dashboards match their generator
+        entry: uv run tools/dashboards.py
+        language: system
+        pass_filenames: false
+        files: ^(tools/dashboards\.py|dashboards/)
+      - id: lint
+        name: Dashboards and rules name only what Fleet and Thurbox export
+        entry: uv run tools/lint.py
+        language: system
+        pass_filenames: false
+        files: ^(tools/|dashboards/|rules/|catalog/|docs/runbook\.md)
+      - id: lint-tests
+        name: Lint unit tests
+        entry: uv run tests/test_lint.py
+        language: system
+        pass_filenames: false
+        files: ^(tools/lint\.py|tests/test_lint\.py|catalog/)

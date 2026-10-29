@@ -1,0 +1,131 @@
+# Recording and alerting rules for Fleet v2 managers.
+#
+# Every rule groups by `job`, which names one Fleet manager: Prometheus's
+# OTLP receiver sets it to service.namespace/service.name. Fleet exports
+# metrics every 60 s by default, so no window is shorter than 5m.
+# Runbook: docs/runbook.md, one section per alert.
+groups:
+  - name: fleet.recording
+    interval: 1m
+    rules:
+      - record: job_fleet_controller_fleet_outcome:fleet_reconciles:rate5m
+        expr: sum by (job, fleet_controller, fleet_outcome) (rate(fleet_reconcile_duration_seconds_count[5m]))
+      # Mean, not a quantile: Fleet v2.4 records the histogram on
+      # millisecond-scale default buckets, so bucket quantiles are wrong.
+      - record: job_fleet_controller:fleet_reconcile_duration_seconds:mean5m
+        expr: |
+          sum by (job, fleet_controller) (rate(fleet_reconcile_duration_seconds_sum[5m]))
+            /
+          sum by (job, fleet_controller) (rate(fleet_reconcile_duration_seconds_count[5m]))
+      - record: job:fleet_reconcile_errors:ratio_rate15m
+        expr: |
+          sum by (job) (rate(fleet_reconcile_duration_seconds_count{fleet_outcome="error"}[15m]))
+            /
+          sum by (job) (rate(fleet_reconcile_duration_seconds_count[15m]))
+      - record: job_fleet_effect_fleet_outcome:fleet_effects:rate5m
+        expr: sum by (job, fleet_effect, fleet_outcome) (rate(fleet_effects_total[5m]))
+      - record: job_fleet_forge_host_fleet_outcome:fleet_forge_calls:rate5m
+        expr: sum by (job, fleet_forge_host, fleet_outcome) (rate(fleet_forge_calls_total[5m]))
+      - record: job_fleet_forge_host:fleet_forge_calls_unanswered:ratio_rate15m
+        expr: |
+          sum by (job, fleet_forge_host) (rate(fleet_forge_calls_total{fleet_outcome!~"known|absent"}[15m]))
+            /
+          sum by (job, fleet_forge_host) (rate(fleet_forge_calls_total[15m]))
+
+  - name: fleet.alerts
+    rules:
+      - alert: FleetNotReconciling
+        # A manager seen in the last day that reconciled nothing for 10m,
+        # or whose metrics stopped arriving.
+        expr: |
+          sum by (job) (increase(fleet_reconcile_duration_seconds_count[10m])) == 0
+          or
+          (
+            sum by (job) (max_over_time(fleet_reconcile_duration_seconds_count[1d]))
+            unless
+            sum by (job) (count_over_time(fleet_reconcile_duration_seconds_count[10m]))
+          )
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Fleet manager {{ $labels.job }} has not reconciled for 15 minutes"
+          description: "No object reconcile was recorded, or no metrics arrived. Tasks are not progressing."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetnotreconciling
+
+      - alert: FleetReconcileErrors
+        expr: job:fleet_reconcile_errors:ratio_rate15m > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of Fleet reconciles fail on {{ $labels.job }}"
+          description: "More than 5% of object reconciles ended in error for 15 minutes."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetreconcileerrors
+
+      - alert: FleetLeaseLost
+        expr: sum by (job) (increase(fleet_reconcile_duration_seconds_count{fleet_outcome="leaseLost"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fleet manager {{ $labels.job }} lost its lease"
+          description: "A reconcile ended because another process holds the manager lease."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetleaselost
+
+      - alert: FleetEffectsFailing
+        expr: sum by (job, fleet_effect) (increase(fleet_effects_total{fleet_outcome="failed"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fleet {{ $labels.fleet_effect }} effects fail on {{ $labels.job }}"
+          description: "At least one {{ $labels.fleet_effect }} effect failed in the last 15 minutes."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleeteffectsfailing
+
+      - alert: FleetEffectOutcomesUnknown
+        expr: sum by (job, fleet_effect) (increase(fleet_effects_total{fleet_outcome="unknown"}[30m])) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fleet cannot observe {{ $labels.fleet_effect }} outcomes on {{ $labels.job }}"
+          description: "Three or more {{ $labels.fleet_effect }} effects had an unknown outcome in 30 minutes."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleeteffectoutcomesunknown
+
+      - alert: FleetForgeThrottled
+        expr: sum by (job, fleet_forge_host) (increase(fleet_forge_calls_total{fleet_outcome="throttled"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.fleet_forge_host }} throttles Fleet's change polls"
+          description: "The forge throttled polls from {{ $labels.job }} for 30 minutes. ChangeRequest updates are delayed."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetforgethrottled
+
+      - alert: FleetForgeNotLoggedIn
+        expr: sum by (job, fleet_forge_host) (increase(fleet_forge_calls_total{fleet_outcome=~"notLoggedIn|refused"}[15m])) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Fleet cannot read changes on {{ $labels.fleet_forge_host }}"
+          description: "Change polls from {{ $labels.job }} fail on the forge login or permissions."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetforgenotloggedin
+
+      - alert: FleetForgeUnanswered
+        expr: job_fleet_forge_host:fleet_forge_calls_unanswered:ratio_rate15m > 0.5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Most Fleet change polls to {{ $labels.fleet_forge_host }} get no answer"
+          description: "{{ $value | humanizePercentage }} of polls from {{ $labels.job }} were not known or absent."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetforgeunanswered
+
+      - alert: FleetInboxBacklog
+        expr: min by (job) (min_over_time(fleet_inbox_depth[30m])) > 0
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "Fleet inbox entries on {{ $labels.job }} waited for an hour"
+          description: "The inbox depth stayed at {{ $value }} or more for an hour."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetinboxbacklog

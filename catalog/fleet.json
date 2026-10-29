@@ -1,0 +1,139 @@
+{
+  "fleet": {
+    "repository": "https://github.com/Thurbeen/fleet",
+    "tag": "v2.4.0"
+  },
+  "metrics": [
+    {
+      "name": "fleet.reconcile.duration",
+      "instrument": "histogram",
+      "unit": "s",
+      "attributes": {
+        "fleet.controller": [
+          "ChangeRequestController",
+          "ConversationController",
+          "ForgeController",
+          "ListenerController",
+          "TaskController"
+        ],
+        "fleet.outcome": [
+          "changed",
+          "conflict",
+          "error",
+          "leaseLost",
+          "unchanged"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "fleet_reconcile_duration_seconds_bucket",
+          "fleet_reconcile_duration_seconds_count",
+          "fleet_reconcile_duration_seconds_sum"
+        ],
+        "labels": [
+          "fleet_controller",
+          "fleet_outcome"
+        ]
+      }
+    },
+    {
+      "name": "fleet.effects",
+      "instrument": "counter",
+      "unit": "{effect}",
+      "attributes": {
+        "fleet.effect": [
+          "brief",
+          "deliver",
+          "markReady",
+          "release",
+          "spawn"
+        ],
+        "fleet.outcome": [
+          "adopted",
+          "already",
+          "delivered",
+          "failed",
+          "markedReady",
+          "moved",
+          "opened",
+          "posted",
+          "released",
+          "spawned",
+          "unknown",
+          "unmapped"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "fleet_effects_total"
+        ],
+        "labels": [
+          "fleet_effect",
+          "fleet_outcome"
+        ]
+      }
+    },
+    {
+      "name": "fleet.forge.calls",
+      "instrument": "counter",
+      "unit": "{call}",
+      "attributes": {
+        "fleet.forge.host": [],
+        "fleet.outcome": [
+          "absent",
+          "incomplete",
+          "known",
+          "notLoggedIn",
+          "refused",
+          "throttled",
+          "timeout",
+          "unavailable",
+          "unreadable"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "fleet_forge_calls_total"
+        ],
+        "labels": [
+          "fleet_forge_host",
+          "fleet_outcome"
+        ]
+      }
+    },
+    {
+      "name": "fleet.inbox.depth",
+      "instrument": "gauge",
+      "unit": "{entry}",
+      "attributes": {},
+      "prometheus": {
+        "series": [
+          "fleet_inbox_depth"
+        ],
+        "labels": []
+      }
+    }
+  ],
+  "spans": {
+    "names": [
+      "effect {kind}",
+      "fleet {name}",
+      "forge poll",
+      "reconcile pass",
+      "reconcile {kind}"
+    ],
+    "attributes": [
+      "fleet.command",
+      "fleet.controller",
+      "fleet.effect",
+      "fleet.forge.host",
+      "fleet.generation",
+      "fleet.kind",
+      "fleet.name",
+      "fleet.outcome",
+      "fleet.pass",
+      "fleet.uid",
+      "process.exit.code"
+    ]
+  }
+}

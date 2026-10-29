@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COMPOSE: docker compose -f quickstart/compose.yaml
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Catalogs match Fleet's and Thurbox's source at their pinned tags
+        run: uv run tools/catalog.py
+      - name: Dashboards match their generator
+        run: uv run tools/dashboards.py
+      - name: Dashboards and rules name only what Fleet and Thurbox export
+        run: |
+          mkdir -p .cache
+          uv run tools/lint.py --promql .cache/dashboard-queries.yml
+      - name: Lint unit tests
+        run: uv run tests/test_lint.py
+      - name: Compose file is valid
+        run: $COMPOSE config --quiet
+      # promtool and otelcol come from the images the quick-start pins.
+      - name: promtool check rules
+        run: >-
+          $COMPOSE run --rm --no-deps -v "$PWD:/w:ro" -w /w --entrypoint promtool prometheus
+          check rules rules/fleet.rules.yml rules/thurbox.rules.yml .cache/dashboard-queries.yml
+      - name: promtool test rules
+        run: >-
+          $COMPOSE run --rm --no-deps -v "$PWD:/w:ro" -w /w --entrypoint promtool prometheus
+          test rules rules/tests/fleet.rules.test.yml rules/tests/thurbox.rules.test.yml
+      - name: Collector config is valid
+        run: $COMPOSE run --rm --no-deps collector validate --config=/etc/otelcol/config.yaml
+
+  smoke:
+    name: Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Start the quick-start stack
+        run: $COMPOSE up -d
+      - name: Send synthetic Fleet and Thurbox telemetry and query every dashboard
+        run: uv run tests/smoke.py
+      - name: Stack logs
+        if: failure()
+        run: $COMPOSE logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: $COMPOSE down -v
+
+  all-checks:
+    name: All Checks
+    if: always()
+    needs: [lint, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for r in $RESULTS; do [ "$r" = success ] || { echo "a job ended with $r"; exit 1; }; done

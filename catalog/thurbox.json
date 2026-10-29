@@ -1,0 +1,251 @@
+{
+  "thurbox": {
+    "repository": "https://github.com/Thurbeen/thurbox",
+    "tag": "v2.77.0"
+  },
+  "metrics": [
+    {
+      "name": "thurbox.blocked.duration",
+      "instrument": "histogram",
+      "unit": "s",
+      "attributes": {
+        "agent": []
+      },
+      "prometheus": {
+        "series": [
+          "thurbox_blocked_duration_seconds_bucket",
+          "thurbox_blocked_duration_seconds_count",
+          "thurbox_blocked_duration_seconds_sum"
+        ],
+        "labels": [
+          "agent"
+        ]
+      }
+    },
+    {
+      "name": "thurbox.session.exits",
+      "instrument": "counter",
+      "unit": "{exit}",
+      "attributes": {
+        "agent": [],
+        "exit_code": []
+      },
+      "prometheus": {
+        "series": [
+          "thurbox_session_exits_total"
+        ],
+        "labels": [
+          "agent",
+          "exit_code"
+        ]
+      }
+    },
+    {
+      "name": "thurbox.session.lifecycle",
+      "instrument": "counter",
+      "unit": "{event}",
+      "attributes": {
+        "agent": [],
+        "reason": [
+          "exited",
+          "force_deleted",
+          "forgotten",
+          "launch_failed",
+          "lost",
+          "registered",
+          "relaunched",
+          "restored",
+          "soft_deleted",
+          "spawned",
+          "started",
+          "stopped",
+          "updated"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "thurbox_session_lifecycle_total"
+        ],
+        "labels": [
+          "agent",
+          "reason"
+        ]
+      }
+    },
+    {
+      "name": "thurbox.session.lifetime",
+      "instrument": "histogram",
+      "unit": "s",
+      "attributes": {
+        "agent": [],
+        "reason": [
+          "exited",
+          "force_deleted",
+          "forgotten",
+          "launch_failed",
+          "lost",
+          "registered",
+          "relaunched",
+          "restored",
+          "soft_deleted",
+          "spawned",
+          "started",
+          "stopped",
+          "updated"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "thurbox_session_lifetime_seconds_bucket",
+          "thurbox_session_lifetime_seconds_count",
+          "thurbox_session_lifetime_seconds_sum"
+        ],
+        "labels": [
+          "agent",
+          "reason"
+        ]
+      }
+    },
+    {
+      "name": "thurbox.session.transitions",
+      "instrument": "counter",
+      "unit": "{transition}",
+      "attributes": {
+        "agent": [],
+        "from": [
+          "background",
+          "blocked",
+          "done",
+          "failed",
+          "idle",
+          "running",
+          "stopped",
+          "uncovered",
+          "unreachable",
+          "unreported",
+          "working"
+        ],
+        "to": [
+          "background",
+          "blocked",
+          "done",
+          "failed",
+          "idle",
+          "running",
+          "stopped",
+          "uncovered",
+          "unreachable",
+          "unreported",
+          "working"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "thurbox_session_transitions_total"
+        ],
+        "labels": [
+          "agent",
+          "from",
+          "to"
+        ]
+      }
+    },
+    {
+      "name": "thurbox.sessions",
+      "instrument": "gauge",
+      "unit": "{session}",
+      "attributes": {
+        "agent": [],
+        "backend": [],
+        "state": [
+          "background",
+          "blocked",
+          "done",
+          "failed",
+          "idle",
+          "lost",
+          "running",
+          "stopped",
+          "uncovered",
+          "unreachable",
+          "unreported",
+          "working"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "thurbox_sessions"
+        ],
+        "labels": [
+          "agent",
+          "backend",
+          "state"
+        ]
+      }
+    },
+    {
+      "name": "thurbox.turn.duration",
+      "instrument": "histogram",
+      "unit": "s",
+      "attributes": {
+        "agent": [],
+        "outcome": [
+          "background",
+          "blocked",
+          "done",
+          "failed",
+          "idle",
+          "running",
+          "stopped",
+          "uncovered",
+          "unreachable",
+          "unreported",
+          "working"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "thurbox_turn_duration_seconds_bucket",
+          "thurbox_turn_duration_seconds_count",
+          "thurbox_turn_duration_seconds_sum"
+        ],
+        "labels": [
+          "agent",
+          "outcome"
+        ]
+      }
+    }
+  ],
+  "per_session_attribute": "thurbox.session.id",
+  "logs": {
+    "events": [
+      "thurbox.session.changed",
+      "thurbox.session.created",
+      "thurbox.session.gone",
+      "thurbox.session.state_changed"
+    ],
+    "attributes": [
+      "agent",
+      "backend",
+      "exit_code",
+      "from",
+      "outcome",
+      "reason",
+      "state",
+      "thurbox.session.id",
+      "thurbox.session.name",
+      "to"
+    ]
+  },
+  "resource": [
+    "host.name",
+    "service.name",
+    "service.version",
+    "thurbox.instance"
+  ],
+  "agent_resource": [
+    "thurbox.agent",
+    "thurbox.session.id",
+    "thurbox.session.name"
+  ]
+}
