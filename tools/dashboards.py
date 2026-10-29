@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.12"
 # ///
-"""Generate the Grafana dashboards in dashboards/ from this file.
+"""Generate the Grafana dashboards in dashboards/fleet and dashboards/thurbox.
 
     uv run tools/dashboards.py           # fail if dashboards/ is stale
     uv run tools/dashboards.py --write   # regenerate dashboards/
@@ -17,12 +17,14 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent.parent / "dashboards"
 
-# Fleet exports metrics every 60 s by default (OTEL_METRIC_EXPORT_INTERVAL).
-# A rate needs two points, so no Prometheus panel looks at less than 2m.
+# Fleet exports metrics every 60 s by default (OTEL_METRIC_EXPORT_INTERVAL),
+# and Thurbox once a minute from `automation tick`. A rate needs two points,
+# so no Prometheus panel looks at less than 2m.
 MIN_INTERVAL = "2m"
 JOB = 'job=~"$job"'
 PROM = {"type": "prometheus", "uid": "${prometheus}"}
 TEMPO = {"type": "tempo", "uid": "${tempo}"}
+LOKI = {"type": "loki", "uid": "${loki}"}
 
 # The status colours. Every other series takes Grafana's palette.
 BAD, WARN, GOOD = "red", "orange", "green"
@@ -34,7 +36,9 @@ OUTCOME_COLORS = {
 
 
 def sel(*matchers: str) -> str:
-    return "{" + ",".join((JOB,) + matchers) + "}"
+    # Thurbox's resource names service.name only, so its job is always thurbox.
+    first = () if any(m.startswith("job=") for m in matchers) else (JOB,)
+    return "{" + ",".join(first + matchers) + "}"
 
 
 def rate(metric: str, *matchers: str, by: str = "") -> str:
@@ -45,7 +49,7 @@ def rate(metric: str, *matchers: str, by: str = "") -> str:
 def over_range(metric: str, *matchers: str, by: str = "") -> str:
     """Increase over the dashboard range, counting a series born inside the
     range from zero: `increase()` never counts a series' first sample, and
-    Fleet's rare outcomes start a new series at 1."""
+    rare outcomes start a new series at 1."""
     s = f"{metric}{sel(*matchers)}"
     group = f" by ({by})" if by else ""
     return f"sum{group} (((({s}) * 1) unless ({s} offset $__range)) or increase({s}[$__range]))"
@@ -188,11 +192,12 @@ JOB_VAR = query_var(
 
 
 def dashboard(uid: str, title: str, desc: str, board: Board, variables: list[dict]) -> dict:
+    product = uid.split("-")[0]
     return {
         "uid": uid,
         "title": title,
         "description": desc,
-        "tags": ["fleet"],
+        "tags": ["agent-observability", product],
         "editable": True,
         "graphTooltip": 1,
         "time": {"from": "now-6h", "to": "now"},
@@ -200,8 +205,8 @@ def dashboard(uid: str, title: str, desc: str, board: Board, variables: list[dic
         "schemaVersion": 41,
         "templating": {"list": variables},
         "annotations": {"list": []},
-        "links": [{"type": "dashboards", "tags": ["fleet"], "title": "Fleet", "asDropdown": True,
-                   "includeVars": True, "keepTime": True}],
+        "links": [{"type": "dashboards", "tags": ["agent-observability"], "title": "Agents", "asDropdown": True,
+                   "includeVars": False, "keepTime": True}],
         "panels": board.panels,
     }
 
@@ -401,8 +406,278 @@ def traces() -> dict:
                       textbox_var("object", "Object", ".+", "A regular expression on the Fleet object name (fleet.name).")])
 
 
-DASHBOARDS = {"fleet-overview.json": overview, "fleet-forge.json": forge, "fleet-gateway.json": gateway,
-              "fleet-traces.json": traces}
+THURBOX = 'job="thurbox"'
+HOST = 'host_name=~"$host"'
+AGENT = 'agent=~"$agent"'
+# Thurbox's state words, coloured the way its session list reads.
+STATE_COLORS = {
+    "working": "blue", "blocked": "orange", "background": "purple", "done": "green", "idle": "text",
+    "failed": "red", "lost": "dark-red", "unreachable": "semi-dark-orange", "stopped": "gray",
+    "running": "light-blue", "uncovered": "gray", "unreported": "gray",
+}
+THURBOX_VARS = [
+    datasource_var("prometheus", "prometheus", "Prometheus"),
+    query_var("host", "Host", 'label_values(thurbox_sessions{job="thurbox"}, host_name)',
+              "The host.name of a Thurbox instance. Empty unless Prometheus promotes host.name."),
+    query_var("agent", "Agent", 'label_values(thurbox_sessions{job="thurbox", host_name=~"$host"}, agent)',
+              "The coding agent a session runs."),
+]
+
+
+def tb(*matchers: str) -> tuple[str, ...]:
+    return (THURBOX, HOST, AGENT) + matchers
+
+
+def counted(metric: str, window: str = "$__range", by: str = "") -> str:
+    """What a Thurbox counter or histogram series counted over a window.
+
+    Thurbox exports deltas, and the collector's deltatocumulative processor
+    sends a cumulative point only when a delta arrives, so a series has a
+    sample only in the minutes something happened. `increase()` needs two
+    samples in the window and goes stale between them; the last value in the
+    window minus the last value before it does not. A series born in the
+    window counts from zero. The look-back before the window is one day.
+    """
+    s = f"{metric}{sel(*tb())}"
+    last = f"last_over_time({s}[{window}])"
+    group = f" by ({by})" if by else ""
+    return f"sum{group} (clamp_min({last} - last_over_time({s}[1d] offset {window}), 0) or {last})"
+
+
+def quantile(q: float, metric: str, window: str) -> str:
+    return f"histogram_quantile({q}, {counted(metric + '_bucket', window, by='le')})"
+
+
+def by_state(panel: dict) -> dict:
+    panel["fieldConfig"]["overrides"] = [
+        {"matcher": {"id": "byName", "options": state},
+         "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": color}}]}
+        for state, color in STATE_COLORS.items()
+    ]
+    return panel
+
+
+def thurbox_sessions() -> dict:
+    g = "thurbox_sessions"
+    now = lambda states: f'sum({g}{sel(*tb(f"state=~\"{states}\""))})'
+    b = Board()
+    b.row("Now")
+    b.add(stat("Sessions", f"sum({g}{sel(*tb())})", "Live sessions, in every state."), 4, 4)
+    b.add(stat("Working", now("working"), "Sessions whose agent is in a turn."), 4, 4)
+    waiting = stat("Waiting on you", now("blocked"), "Sessions blocked on a human: a permission prompt or a "
+                   "question.")
+    waiting["fieldConfig"]["defaults"]["thresholds"]["steps"] = [{"color": GOOD, "value": None},
+                                                                 {"color": WARN, "value": 1}]
+    b.add(waiting, 4, 4)
+    b.add(stat("Done", now("done"), "Sessions whose agent finished a turn you have not looked at."), 4, 4)
+    b.add(stat("Idle", now("idle|background"), "Sessions at rest, or running background work."), 4, 4)
+    b.add(stat("Failed, lost or unreachable", now("failed|lost|unreachable"),
+               "A launch that failed, a pane that went with nobody asking, or a remote host that cannot be "
+               "reached.", bad_above=1), 4, 4)
+
+    b.row("Sessions")
+    b.add(by_state(series("Sessions by state", [target(f"sum by (state) ({g}{sel(*tb())}) > 0", "{{state}}")],
+                          "Live sessions by the state word thurbox-cli session list shows.", stack=True)), 12, 8)
+    b.add(series("Sessions by agent", [target(f"sum by (agent) ({g}{sel(*tb())})", "{{agent}}")],
+                 "Live sessions per coding agent.", stack=True), 12, 8)
+
+    turns, waits = "thurbox_turn_duration_seconds", "thurbox_blocked_duration_seconds"
+    b.row("Turns")
+    b.add(stat("Turns", counted(f"{turns}_count"),
+               "Turns that ended over the range. A turn runs from entering working to leaving it."), 6, 4)
+    b.add(stat("Median turn", quantile(0.5, turns, "$__range"), "Median turn over the range.", unit="s"), 6, 4)
+    b.add(stat("p95 turn", quantile(0.95, turns, "$__range"), "95th percentile turn over the range.", unit="s"), 6, 4)
+    b.add(stat("Median wait on you", quantile(0.5, waits, "$__range"),
+               "Median time a session stayed blocked on a human, over the range.", unit="s"), 6, 4)
+    b.add(series("Turn duration, trailing hour",
+                 [target(quantile(0.5, turns, "1h"), "p50"), target(quantile(0.95, turns, "1h"), "p95", ref="B")],
+                 "Turn quantiles over the hour before each point, from the histogram's buckets (1 s to 8 h).",
+                 unit="s"), 12, 8)
+    b.add(series("Wait on you, trailing hour",
+                 [target(quantile(0.5, waits, "1h"), "p50"), target(quantile(0.95, waits, "1h"), "p95", ref="B")],
+                 "How long sessions stayed blocked on a human, over the hour before each point.", unit="s"), 12, 8)
+    b.add(table("Turns by outcome", counted(f"{turns}_count", by="outcome"),
+                "Turns over the range by the state they ended in: done, blocked, idle or background.",
+                ["outcome"]), 8, 8)
+    mean = f"{counted(turns + '_sum', by='agent')} / {counted(turns + '_count', by='agent')}"
+    gauge = {"type": "bargauge", "title": "Mean turn by agent", "datasource": PROM, "interval": MIN_INTERVAL,
+             "description": "Mean turn per agent over the range.",
+             "targets": [{**target(mean, "{{agent}}"), "instant": True, "range": False}],
+             "fieldConfig": {"defaults": {"unit": "s", "min": 0, "color": {"mode": "palette-classic"}}, "overrides": []},
+             "options": {"orientation": "horizontal", "displayMode": "gradient", "showUnfilled": True,
+                         "reduceOptions": {"calcs": ["lastNotNull"]}}}
+    b.add(gauge, 8, 8)
+    b.add(table("State changes", counted("thurbox_session_transitions_total", by="from, to"),
+                "State changes over the range. An empty from is a session's first state.", ["from", "to"]), 8, 8)
+
+    b.row("Lifecycle")
+    b.add(table("Lifecycle events", counted("thurbox_session_lifecycle_total", by="reason"),
+                "Sessions spawned, stopped, lost, relaunched, deleted and more, over the range.", ["reason"]), 8, 8)
+    b.add(table("Agent exits", counted("thurbox_session_exits_total", by="agent, exit_code"),
+                "Agent processes that returned, by exit code, over the range.", ["agent", "exit_code"]), 8, 8)
+    life = "thurbox_session_lifetime_seconds"
+    b.add(stat("Median session lifetime", quantile(0.5, life, "$__range"),
+               "Median time from creation to going, for sessions that went over the range.", unit="s"), 8, 8)
+    return dashboard("thurbox-sessions", "Thurbox sessions",
+                     "Thurbox's own session metrics: sessions by state, turns, waits on a human and lifecycle.",
+                     b, THURBOX_VARS)
+
+
+def thurbox_events() -> dict:
+    stream = '{service_name="thurbox"}'
+    session = '| thurbox_session_name =~ "$session" | agent =~ "$agent"'
+    events = f'{stream} |= "thurbox.session." {session}'
+
+    def logs(title: str, expr: str, desc: str) -> dict:
+        return {"type": "logs", "title": title, "description": desc, "datasource": LOKI,
+                "targets": [{"refId": "A", "datasource": LOKI, "expr": expr, "queryType": "range"}],
+                "options": {"showTime": True, "wrapLogMessage": False, "sortOrder": "Descending",
+                            "enableLogDetails": True, "dedupStrategy": "none"}}
+
+    b = Board()
+    b.row("Session events")
+    count = {"type": "timeseries", "title": "Session events", "datasource": LOKI, "interval": "10m",
+             "description": "Session events per 10 minutes, from Thurbox's event log records.",
+             "targets": [{"refId": "A", "datasource": LOKI, "legendFormat": "{{event}}",
+                          "expr": f'sum by (event) (count_over_time({events} | label_format event="{{{{__line__}}}}" '
+                                  "[$__interval]))"}],
+             "fieldConfig": {"defaults": {"unit": "short", "min": 0, "custom": {
+                 "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1, "stacking": {"mode": "normal", "group": "A"}}},
+                 "overrides": []},
+             "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["sum"]},
+                         "tooltip": {"mode": "multi", "sort": "desc"}}}
+    b.add(count, 24, 7)
+    timeline = (f'{events} | line_format "{{{{.thurbox_session_name}}}}  {{{{.agent}}}}  '
+                '{{trimPrefix \\"thurbox.session.\\" __line__}} {{.from}}{{if .to}} -> {{.to}}{{end}} {{.reason}}"')
+    b.add(logs("Session timeline", timeline,
+               "One line per session event: created, state_changed (from -> to), changed and gone (reason). "
+               "Each record carries thurbox.session.id, which the agents' own telemetry carries too."), 24, 12)
+    b.row("Diagnostics")
+    b.add(logs("Interface warnings", f'{stream} != "thurbox.session." | detected_level=~"warn|error"',
+               "The interface's own WARN and ERROR log lines, sent when export_diagnostic_logs is on."), 24, 7)
+    return dashboard("thurbox-events", "Thurbox session events",
+                     "Thurbox's session event log records and diagnostic logs in Loki.", b,
+                     [datasource_var("loki", "loki", "Loki"),
+                      textbox_var("session", "Session", ".+", "A regular expression on the session name."),
+                      textbox_var("agent", "Agent", ".+", "A regular expression on the agent.")])
+
+
+# Each agent's own token types mapped onto four classes, so every agent
+# Thurbox launches shares one scale. Claude Code's types are disjoint. Codex
+# counts cached input inside input (total = input + output) and reasoning
+# inside output. A new agent needs one entry here.
+TOKEN_CLASSES = {
+    "claude": ("claude_code_token_usage_tokens_total", "type", {
+        "input": ["input"], "cache_read": ["cacheRead"], "cache_write": ["cacheCreation"], "output": ["output"]}),
+    "codex": ("codex_turn_token_usage_sum", "token_type", {
+        "input": ["input", "-cached_input"], "cache_read": ["cached_input"], "cache_write": ["cache_write_input"],
+        "output": ["output"]}),
+}
+SESSION = "thurbox_agent, thurbox_session_id, thurbox_session_name"
+
+
+def grew(selector: str, window: str) -> str:
+    """Per series, what an agent's counter counted over a window. The agents
+    export deltas, which reach Prometheus as sparse cumulative samples: the
+    same last-value difference as counted()."""
+    last = f"last_over_time({selector}[{window}])"
+    return f"(clamp_min({last} - last_over_time({selector}[1d] offset {window}), 0) or {last})"
+
+
+def tokens(window: str, by: str) -> str:
+    parts = []
+    for metric, label, classes in TOKEN_CLASSES.values():
+        for cls, types in classes.items():
+            terms = [(t.startswith("-"), t.lstrip("-")) for t in types]
+            expr = " ".join(
+                f"{'-' if neg else ('+' if i else '')} sum by ({SESSION}) "
+                f"({grew(f'{metric}{{thurbox_agent!=\"\",{label}=\"{t}\"}}', window)})"
+                for i, (neg, t) in enumerate(terms))
+            parts.append(f'label_replace({expr}, "token_class", "{cls}", "", "")')
+    return f"sum by ({by}) ({' or '.join(parts)})"
+
+
+def cost(window: str, by: str) -> str:
+    # Only Claude Code exports a cost. Nothing here prices another agent.
+    return f'sum by ({by}) ({grew("claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}", window)})'
+
+
+def as_agent(expr: str) -> str:
+    return f'sum by (agent) (label_replace({expr}, "agent", "$1", "thurbox_agent", "(.+)"))'
+
+
+def agent_usage() -> dict:
+    def bar_gauge(title: str, expr: str, desc: str, unit: str) -> dict:
+        return {"type": "bargauge", "title": title, "description": desc, "datasource": PROM, "interval": MIN_INTERVAL,
+                "targets": [{**target(expr, "{{thurbox_agent}}"), "instant": True, "range": False}],
+                "fieldConfig": {"defaults": {"unit": unit, "min": 0, "noValue": "none exported",
+                                             "color": {"mode": "palette-classic"}}, "overrides": []},
+                "options": {"orientation": "horizontal", "displayMode": "gradient", "showUnfilled": True,
+                            "reduceOptions": {"calcs": ["lastNotNull"]}}}
+
+    def merged(title: str, desc: str, targets: list[dict], names: dict[str, str], units: dict[str, str],
+               sort: str, required: str = "") -> dict:
+        return {"type": "table", "title": title, "description": desc, "datasource": PROM, "interval": MIN_INTERVAL,
+                "targets": targets,
+                "transformations": [
+                    {"id": "merge", "options": {}},
+                    {"id": "organize", "options": {"excludeByName": {"Time": True}, "renameByName": names}},
+                    {"id": "sortBy", "options": {"sort": [{"field": sort, "desc": True}]}},
+                ] + ([{"id": "filterByValue", "options": {"type": "exclude", "match": "any", "filters": [
+                    {"fieldName": required, "config": {"id": "isNull", "options": {}}}]}}] if required else []),
+                "fieldConfig": {"defaults": {"noValue": "—", "decimals": 0}, "overrides": [
+                    {"matcher": {"id": "byName", "options": name},
+                     "properties": [{"id": "unit", "value": unit}] + (
+                         [{"id": "decimals", "value": 2}] if unit == "currencyUSD" else [])}
+                    for name, unit in units.items()]},
+                "options": {"showHeader": True}}
+
+    b = Board()
+    b.row("Over the range")
+    b.add(bar_gauge("Cost by agent", cost("$__range", "thurbox_agent"),
+                    "USD over the range, as each agent reports it. Only Claude Code exports a cost: the "
+                    "other agents show under Agent coverage, never as an estimate.", "currencyUSD"), 6, 8)
+    b.add(bar_gauge("Tokens by agent", tokens("$__range", "thurbox_agent"),
+                    "Every agent on one scale: uncached input, cache reads, cache writes and output, "
+                    "normalised from each agent's own token types (TOKEN_CLASSES in tools/dashboards.py).", "short"), 6, 8)
+    peak = 'max by (agent) (max_over_time((sum by (agent) (thurbox_sessions{job="thurbox"}))[$__range:5m]))'
+    b.add(merged("Agent coverage",
+                 "Every agent Thurbox ran over the range, with what it exports. An agent with sessions and no "
+                 "tokens exports no usage telemetry, so it is missing from the other panels.",
+                 [{**target(peak, instant=True), "refId": "A"},
+                  {**target(as_agent(tokens("$__range", "thurbox_agent")), instant=True), "refId": "B"},
+                  {**target(as_agent(cost("$__range", "thurbox_agent")), instant=True), "refId": "C"}],
+                 {"Value #A": "peak sessions", "Value #B": "tokens", "Value #C": "USD"},
+                 {"tokens": "short", "USD": "currencyUSD"}, sort="peak sessions"), 12, 8)
+
+    b.row("Over time")
+    hourly = series("Tokens per hour by agent and class",
+                    [target(tokens("1h", "thurbox_agent, token_class"), "{{thurbox_agent}} {{token_class}}")],
+                    "Normalised tokens per hour, stacked: every agent that exports usage, in one graph.",
+                    bars=True, stack=True)
+    hourly["interval"] = "1h"
+    hourly["options"]["legend"]["calcs"] = ["sum"]
+    b.add(hourly, 14, 10)
+    b.add(merged("Top sessions",
+                 "Thurbox sessions by normalised tokens over the range, every agent together, with the cost "
+                 "where the agent reports one.",
+                 [{**target(f"topk(15, {tokens('$__range', 'thurbox_session_name, thurbox_agent')})",
+                            instant=True), "refId": "A"},
+                  {**target(cost("$__range", "thurbox_session_name, thurbox_agent"), instant=True),
+                   "refId": "B"}],
+                 {"thurbox_session_name": "session", "thurbox_agent": "agent", "Value #A": "tokens", "Value #B": "USD"},
+                 {"tokens": "short", "USD": "currencyUSD"}, sort="tokens", required="tokens"), 10, 10)
+    return dashboard("thurbox-agent-usage", "Agent usage",
+                     "Tokens and cost of the agents Thurbox launches, normalised across agents.", b,
+                     [datasource_var("prometheus", "prometheus", "Prometheus")])
+
+
+DASHBOARDS = {
+    "fleet/fleet-overview.json": overview, "fleet/fleet-forge.json": forge, "fleet/fleet-gateway.json": gateway,
+    "fleet/fleet-traces.json": traces,
+    "thurbox/thurbox-sessions.json": thurbox_sessions, "thurbox/thurbox-events.json": thurbox_events,
+    "thurbox/thurbox-agent-usage.json": agent_usage,
+}
 
 
 def main() -> None:

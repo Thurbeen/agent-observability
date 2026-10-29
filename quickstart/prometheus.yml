@@ -1,5 +1,5 @@
-# Prometheus for the quick-start stack. Fleet's metrics arrive through the
-# collector on the OTLP receiver, so there is nothing to scrape.
+# Prometheus for the quick-start stack. Fleet's and Thurbox's metrics arrive
+# through the collector on the OTLP receiver, so there is nothing to scrape.
 global:
   evaluation_interval: 30s
 
@@ -10,11 +10,19 @@ otlp:
     - service.version
     - host.name
     - deployment.environment.name
+    # Thurbox's multiplexer socket: tells a sandbox from the real instance.
+    - thurbox.instance
+    # What Thurbox adds to every agent it launches: groups the agents' own
+    # usage by agent and session.
+    - thurbox.agent
+    - thurbox.session.id
+    - thurbox.session.name
 
 storage:
   tsdb:
-    # OTLP pushes can arrive slightly out of order.
-    out_of_order_time_window: 30m
+    # OTLP pushes can arrive out of order, and tools/synthetic.py backfills
+    # the last six hours of demo data.
+    out_of_order_time_window: 7h
 
 rule_files:
   - /etc/prometheus/rules/*.rules.yml

@@ -1,0 +1,41 @@
+{
+  "claude-code": {
+    "documentation": "https://code.claude.com/docs/en/monitoring-usage.md",
+    "tag": "docs"
+  },
+  "metrics": [
+    {
+      "name": "claude_code.cost.usage",
+      "instrument": "counter",
+      "unit": "USD",
+      "attributes": {},
+      "prometheus": {
+        "series": [
+          "claude_code_cost_usage_USD_total"
+        ],
+        "labels": []
+      }
+    },
+    {
+      "name": "claude_code.token.usage",
+      "instrument": "counter",
+      "unit": "tokens",
+      "attributes": {
+        "type": [
+          "cacheCreation",
+          "cacheRead",
+          "input",
+          "output"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "claude_code_token_usage_tokens_total"
+        ],
+        "labels": [
+          "type"
+        ]
+      }
+    }
+  ]
+}

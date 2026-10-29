@@ -1,0 +1,33 @@
+{
+  "codex": {
+    "repository": "https://github.com/openai/codex",
+    "tag": "rust-v0.166.0"
+  },
+  "metrics": [
+    {
+      "name": "codex.turn.token_usage",
+      "instrument": "histogram",
+      "unit": "",
+      "attributes": {
+        "token_type": [
+          "cache_write_input",
+          "cached_input",
+          "input",
+          "output",
+          "reasoning_output",
+          "total"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "codex_turn_token_usage_bucket",
+          "codex_turn_token_usage_count",
+          "codex_turn_token_usage_sum"
+        ],
+        "labels": [
+          "token_type"
+        ]
+      }
+    }
+  ]
+}

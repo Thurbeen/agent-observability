@@ -2,17 +2,17 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml==6.0.3"]
 # ///
-"""Check every dashboard and rule against the Fleet telemetry catalog.
+"""Check every dashboard and rule against the catalogs in catalog/.
 
     uv run tools/lint.py                       # check, exit 1 on a problem
     uv run tools/lint.py --promql out.yml      # also write every dashboard
                                                # query as a rule file, for
                                                # `promtool check rules`
 
-A query may name only a metric, label, label value, span name or span
-attribute that catalog/fleet.json lists. Panels reach data sources through
-the dashboard's template variables only. Each alert has a severity, a summary
-and a runbook section.
+A query may name only a metric, label, label value, span name, span
+attribute or log event that a catalog in catalog/ lists.
+Panels reach data sources through the dashboard's template variables only.
+Each alert has a severity, a summary and a runbook section.
 """
 
 import argparse
@@ -24,7 +24,8 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-DATASOURCES = {"prometheus": "${prometheus}", "tempo": "${tempo}"}
+DATASOURCES = {"prometheus": "${prometheus}", "tempo": "${tempo}", "loki": "${loki}"}
+PRODUCTS = ("fleet", "thurbox", "codex", "claude-code")
 SEVERITIES = {"critical", "warning", "info"}
 # What Grafana substitutes before a query reaches Prometheus.
 GRAFANA_VARS = {"$__rate_interval": "5m", "$__interval": "2m", "$__range": "1h"}
@@ -36,32 +37,64 @@ def problem(where: str, what: str) -> None:
     problems.append(f"{where}: {what}")
 
 
+def underscored(name: str) -> str:
+    return name.replace(".", "_")
+
+
 class Catalog:
-    def __init__(self, data: dict) -> None:
-        self.series = {s for m in data["metrics"] for s in m["prometheus"]["series"]}
+    def __init__(self, catalogs: list[dict]) -> None:
+        self.series: set[str] = set()
         self.labels: dict[str, set[str]] = {}
-        for m in data["metrics"]:
-            for attr, values in m["attributes"].items():
-                self.labels.setdefault(attr.replace(".", "_"), set()).update(values)
-        self.span_attrs = set(data["spans"]["attributes"])
-        self.span_examples = [re.sub(r"\{\w+\}", "X", n) for n in data["spans"]["names"]]
+        self.span_attrs: set[str] = set()
+        self.span_examples: list[str] = []
+        self.log_events: set[str] = set()
+        self.log_attrs: set[str] = set()
+        for data in catalogs:
+            self.series |= {s for m in data["metrics"] for s in m["prometheus"]["series"]}
+            for m in data["metrics"]:
+                for attr, values in m["attributes"].items():
+                    self.labels.setdefault(underscored(attr), set()).update(values)
+            if "per_session_attribute" in data:
+                self.labels.setdefault(underscored(data["per_session_attribute"]), set())
+            # Resource attributes Prometheus promotes to labels, Thurbox's own
+            # and those it adds to every agent it launches.
+            for attr in data.get("resource", []) + data.get("agent_resource", []):
+                self.labels.setdefault(underscored(attr), set())
+            spans = data.get("spans", {"attributes": [], "names": []})
+            self.span_attrs |= set(spans["attributes"])
+            self.span_examples += [re.sub(r"\{\w+\}", "X", n) for n in spans["names"]]
+            logs = data.get("logs", {"events": [], "attributes": []})
+            self.log_events |= set(logs["events"])
+            self.log_attrs |= {underscored(a) for a in logs["attributes"] + data.get("resource", [])}
 
 
 def check_promql(where: str, expr: str, cat: Catalog, recorded: set[str]) -> None:
-    for token in re.findall(r"(?<![:\w])fleet_\w+(?![:\w])", expr):
+    for token in re.findall(r"(?<![:\w])(?:fleet|thurbox|codex|claude_code)_\w+(?![:\w])", expr):
         if token not in cat.series and token not in cat.labels:
-            problem(where, f"{token} is not a metric or label Fleet exports")
-    for token in re.findall(r"(?<![\w:])(\w*:[\w:]+)(?![\w:])", expr):
+            problem(where, f"{token} is not a metric or label a catalog lists")
+    for token in re.findall(r"(?<![\w:$])(\w*:[\w:]+)(?![\w:])", expr):
         if token not in recorded:
             problem(where, f"{token} is not a recorded series")
-    for label, op, value in re.findall(r"\b(fleet_\w+)\s*(=~|!~|!=|=)\s*\"([^\"]*)\"", expr):
+    for label, op, value in re.findall(r"\b(\w+)\s*(=~|!~|!=|=)\s*\"([^\"]*)\"", expr):
         allowed = cat.labels.get(label)
         if not allowed or "$" in value:
             continue
         alternatives = value.split("|") if "~" in op else [value]
         for alt in alternatives:
             if re.fullmatch(r"\w+", alt) and alt not in allowed:
-                problem(where, f'{label} has no value "{alt}" (Fleet exports {sorted(allowed)})')
+                problem(where, f'{label} has no value "{alt}" (the catalog lists {sorted(allowed)})')
+
+
+def check_logql(where: str, expr: str, cat: Catalog) -> None:
+    for name in re.findall(r"thurbox\.session\.\w+", expr):
+        if name not in cat.log_events:
+            problem(where, f"{name} is not a log event Thurbox exports")
+    for label in re.findall(r"\|\s*(\w+)\s*(?:=~|!~|!=|=|>=|<=|>|<)", expr):
+        if label not in cat.log_attrs and label != "detected_level":
+            problem(where, f"{label} is not a log attribute Thurbox exports")
+    for label in re.findall(r"\{\{\s*\.(\w+)", expr):
+        if label not in cat.log_attrs:
+            problem(where, f"{label} is not a log attribute Thurbox exports")
 
 
 def check_traceql(where: str, query: str, cat: Catalog) -> None:
@@ -82,7 +115,7 @@ def panels(items: list[dict]):
 
 def check_dashboards(cat: Catalog, recorded: set[str]) -> list[str]:
     exprs, uids = [], set()
-    files = sorted((ROOT / "dashboards").glob("*.json"))
+    files = sorted((ROOT / "dashboards").glob("*/*.json"))
     if not files:
         problem("dashboards", "no dashboards found")
     for path in files:
@@ -113,7 +146,9 @@ def check_dashboards(cat: Catalog, recorded: set[str]) -> list[str]:
                 elif kind not in variables:
                     problem(name, f"uses ${kind}, which the dashboard does not define")
             for t in p.get("targets", []):
-                if "expr" in t:
+                if "expr" in t and t["datasource"]["type"] == "loki":
+                    check_logql(name, t["expr"], cat)
+                elif "expr" in t:
                     check_promql(name, t["expr"], cat, recorded)
                     exprs.append(t["expr"])
                 if t.get("queryType") == "traceql":
@@ -149,7 +184,8 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--promql", type=Path, help="write the dashboard queries as a rule file")
     a = p.parse_args()
-    cat = Catalog(json.loads((ROOT / "catalog" / "fleet.json").read_text()))
+    catalogs = [json.loads((ROOT / "catalog" / f"{p}.json").read_text()) for p in PRODUCTS]
+    cat = Catalog(catalogs)
     recorded = check_rules(cat)
     exprs = check_dashboards(cat, recorded)
     if a.promql:
@@ -162,7 +198,8 @@ def main() -> None:
     if problems:
         print("\n".join(problems), file=sys.stderr)
         sys.exit(f"lint: {len(problems)} problem(s)")
-    print(f"lint: {len(exprs)} dashboard queries and the rules match Fleet {json.loads((ROOT / 'catalog' / 'fleet.json').read_text())['fleet']['tag']}")
+    tags = ", ".join(f"{p} {c[p]['tag']}" for p, c in zip(PRODUCTS, catalogs))
+    print(f"lint: {len(exprs)} Prometheus dashboard queries and the rules match {tags}")
 
 
 if __name__ == "__main__":

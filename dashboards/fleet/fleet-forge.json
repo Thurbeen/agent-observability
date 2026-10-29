@@ -1,8 +1,9 @@
 {
-  "uid": "fleet-overview",
-  "title": "Fleet overview",
-  "description": "Fleet v2 manager health: reconcile passes, effects and errors.",
+  "uid": "fleet-forge",
+  "title": "Fleet forge polling",
+  "description": "ChangeRequest polling per forge host: answers, throttles and failures.",
   "tags": [
+    "agent-observability",
     "fleet"
   ],
   "editable": true,
@@ -53,6 +54,33 @@
         "regex": "",
         "sort": 1,
         "hide": 0
+      },
+      {
+        "name": "host",
+        "label": "Forge host",
+        "description": "The forge host of a change poll.",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "query": {
+          "query": "label_values(fleet_forge_calls_total{job=~\"$job\"}, fleet_forge_host)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "definition": "label_values(fleet_forge_calls_total{job=~\"$job\"}, fleet_forge_host)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [],
+        "regex": "",
+        "sort": 1,
+        "hide": 0
       }
     ]
   },
@@ -63,18 +91,18 @@
     {
       "type": "dashboards",
       "tags": [
-        "fleet"
+        "agent-observability"
       ],
-      "title": "Fleet",
+      "title": "Agents",
       "asDropdown": true,
-      "includeVars": true,
+      "includeVars": false,
       "keepTime": true
     }
   ],
   "panels": [
     {
       "type": "row",
-      "title": "Now",
+      "title": "Over the range",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -86,8 +114,8 @@
     },
     {
       "type": "stat",
-      "title": "Reconciles per second",
-      "description": "Object reconciles per second over all controllers. Zero means the manager stopped sweeping.",
+      "title": "Change polls",
+      "description": "Change polls Fleet sent to the selected forges.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -100,7 +128,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\"}[$__rate_interval]))",
+          "expr": "sum ((((fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\"}) * 1) unless (fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\"} offset $__range)) or increase(fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\"}[$__range]))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false,
@@ -109,7 +137,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "noValue": "0",
           "thresholds": {
             "mode": "absolute",
@@ -135,14 +163,14 @@
       "gridPos": {
         "x": 0,
         "y": 1,
-        "w": 4,
+        "w": 6,
         "h": 4
       }
     },
     {
       "type": "stat",
-      "title": "Reconcile errors",
-      "description": "Reconciles that ended in error or lost the manager lease, over the range.",
+      "title": "Throttled",
+      "description": "Polls the forge throttled. Fleet defers the next polls to that host.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -155,7 +183,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum ((((fleet_reconcile_duration_seconds_count{job=~\"$job\",fleet_outcome=~\"error|leaseLost\"}) * 1) unless (fleet_reconcile_duration_seconds_count{job=~\"$job\",fleet_outcome=~\"error|leaseLost\"} offset $__range)) or increase(fleet_reconcile_duration_seconds_count{job=~\"$job\",fleet_outcome=~\"error|leaseLost\"}[$__range]))",
+          "expr": "sum ((((fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome=\"throttled\"}) * 1) unless (fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome=\"throttled\"} offset $__range)) or increase(fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome=\"throttled\"}[$__range]))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false,
@@ -192,16 +220,16 @@
         "graphMode": "none"
       },
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 1,
-        "w": 4,
+        "w": 6,
         "h": 4
       }
     },
     {
       "type": "stat",
-      "title": "Failed effects",
-      "description": "Effects whose outcome was failed, over the range.",
+      "title": "Not logged in or refused",
+      "description": "Polls that failed on the forge login or permissions. These do not recover on their own.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -214,66 +242,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum ((((fleet_effects_total{job=~\"$job\",fleet_outcome=\"failed\"}) * 1) unless (fleet_effects_total{job=~\"$job\",fleet_outcome=\"failed\"} offset $__range)) or increase(fleet_effects_total{job=~\"$job\",fleet_outcome=\"failed\"}[$__range]))",
-          "legendFormat": "__auto",
-          "instant": true,
-          "range": false,
-          "format": "table"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "none"
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 1,
-        "w": 4,
-        "h": 4
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Unknown effect outcomes",
-      "description": "Effects Fleet could not observe the outcome of. Fleet recovers them by observing their key.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "interval": "2m",
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "expr": "sum ((((fleet_effects_total{job=~\"$job\",fleet_outcome=\"unknown\"}) * 1) unless (fleet_effects_total{job=~\"$job\",fleet_outcome=\"unknown\"} offset $__range)) or increase(fleet_effects_total{job=~\"$job\",fleet_outcome=\"unknown\"}[$__range]))",
+          "expr": "sum ((((fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome=~\"notLoggedIn|refused\"}) * 1) unless (fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome=~\"notLoggedIn|refused\"} offset $__range)) or increase(fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome=~\"notLoggedIn|refused\"}[$__range]))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false,
@@ -312,14 +281,14 @@
       "gridPos": {
         "x": 12,
         "y": 1,
-        "w": 4,
+        "w": 6,
         "h": 4
       }
     },
     {
       "type": "stat",
-      "title": "Inbox entries waiting",
-      "description": "Undelivered inbox entries over every Task, at the start of the latest pass.",
+      "title": "Timed out or unavailable",
+      "description": "Polls without a usable answer for a transient reason.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -332,62 +301,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "max(fleet_inbox_depth{job=~\"$job\"})",
-          "legendFormat": "__auto",
-          "instant": true,
-          "range": false,
-          "format": "table"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "none"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 1,
-        "w": 4,
-        "h": 4
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Forge throttles",
-      "description": "Change polls a forge throttled, over the range.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "interval": "2m",
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "expr": "sum ((((fleet_forge_calls_total{job=~\"$job\",fleet_outcome=\"throttled\"}) * 1) unless (fleet_forge_calls_total{job=~\"$job\",fleet_outcome=\"throttled\"} offset $__range)) or increase(fleet_forge_calls_total{job=~\"$job\",fleet_outcome=\"throttled\"}[$__range]))",
+          "expr": "sum ((((fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome=~\"timeout|unavailable|unreadable|incomplete\"}) * 1) unless (fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome=~\"timeout|unavailable|unreadable|incomplete\"} offset $__range)) or increase(fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome=~\"timeout|unavailable|unreadable|incomplete\"}[$__range]))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false,
@@ -424,15 +338,15 @@
         "graphMode": "none"
       },
       "gridPos": {
-        "x": 20,
+        "x": 18,
         "y": 1,
-        "w": 4,
+        "w": 6,
         "h": 4
       }
     },
     {
       "type": "row",
-      "title": "Task flow",
+      "title": "Polls per host",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -443,186 +357,9 @@
       }
     },
     {
-      "type": "stat",
-      "title": "Tasks spawned",
-      "description": "Task sessions started or adopted, over the range.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "interval": "2m",
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "expr": "sum ((((fleet_effects_total{job=~\"$job\",fleet_effect=\"spawn\",fleet_outcome=~\"spawned|adopted\"}) * 1) unless (fleet_effects_total{job=~\"$job\",fleet_effect=\"spawn\",fleet_outcome=~\"spawned|adopted\"} offset $__range)) or increase(fleet_effects_total{job=~\"$job\",fleet_effect=\"spawn\",fleet_outcome=~\"spawned|adopted\"}[$__range]))",
-          "legendFormat": "__auto",
-          "instant": true,
-          "range": false,
-          "format": "table"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "none"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 6,
-        "w": 8,
-        "h": 4
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Tasks briefed",
-      "description": "Task briefs sent, over the range.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "interval": "2m",
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "expr": "sum ((((fleet_effects_total{job=~\"$job\",fleet_effect=\"brief\",fleet_outcome=~\"delivered|already\"}) * 1) unless (fleet_effects_total{job=~\"$job\",fleet_effect=\"brief\",fleet_outcome=~\"delivered|already\"} offset $__range)) or increase(fleet_effects_total{job=~\"$job\",fleet_effect=\"brief\",fleet_outcome=~\"delivered|already\"}[$__range]))",
-          "legendFormat": "__auto",
-          "instant": true,
-          "range": false,
-          "format": "table"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "none"
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 6,
-        "w": 8,
-        "h": 4
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Tasks released",
-      "description": "Tasks whose release was established, over the range.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "interval": "2m",
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "expr": "sum ((((fleet_effects_total{job=~\"$job\",fleet_effect=\"release\",fleet_outcome=~\"released\"}) * 1) unless (fleet_effects_total{job=~\"$job\",fleet_effect=\"release\",fleet_outcome=~\"released\"} offset $__range)) or increase(fleet_effects_total{job=~\"$job\",fleet_effect=\"release\",fleet_outcome=~\"released\"}[$__range]))",
-          "legendFormat": "__auto",
-          "instant": true,
-          "range": false,
-          "format": "table"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "none"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 6,
-        "w": 8,
-        "h": 4
-      }
-    },
-    {
-      "type": "row",
-      "title": "Reconcile",
-      "collapsed": false,
-      "panels": [],
-      "gridPos": {
-        "x": 0,
-        "y": 10,
-        "w": 24,
-        "h": 1
-      }
-    },
-    {
       "type": "timeseries",
-      "title": "Reconciles by controller",
-      "description": "Object reconciles per second, per controller.",
+      "title": "Polls by host and outcome",
+      "description": "Change polls per second. known and absent are answers; every other outcome is an Unknown observation, which Fleet never treats as absence.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -635,13 +372,253 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum by (fleet_controller) (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{fleet_controller}}"
+          "expr": "sum by (fleet_forge_host, fleet_outcome) (rate(fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\"}[$__rate_interval]))",
+          "legendFormat": "{{fleet_forge_host}} {{fleet_outcome}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )error( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )failed( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )unknown( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )leaseLost( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )conflict( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )throttled( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )notLoggedIn( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )refused( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )timeout( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )unavailable( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )unreadable( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )incomplete( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Unanswered ratio by host",
+      "description": "Share of polls per host that got no answer (not known or absent).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "interval": "2m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "sum by (fleet_forge_host) (rate(fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome!~\"known|absent\"}[$__rate_interval])) / sum by (fleet_forge_host) (rate(fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\"}[$__rate_interval]))",
+          "legendFormat": "{{fleet_forge_host}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
           "min": 0,
           "custom": {
             "drawStyle": "line",
@@ -849,16 +826,16 @@
         }
       },
       "gridPos": {
-        "x": 0,
-        "y": 11,
+        "x": 12,
+        "y": 6,
         "w": 12,
         "h": 8
       }
     },
     {
       "type": "timeseries",
-      "title": "Reconciles by outcome",
-      "description": "changed: the reconcile wrote or ran an effect. conflict, error and leaseLost need attention when they persist.",
+      "title": "Throttles by host",
+      "description": "Throttled polls per second, per forge host.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -871,7 +848,317 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum by (fleet_outcome) (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\"}[$__rate_interval]))",
+          "expr": "sum by (fleet_forge_host) (rate(fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\",fleet_outcome=\"throttled\"}[$__rate_interval]))",
+          "legendFormat": "{{fleet_forge_host}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )error( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )failed( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )unknown( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )leaseLost( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )conflict( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )throttled( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )notLoggedIn( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )refused( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )timeout( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )unavailable( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )unreadable( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )incomplete( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Polls over the range",
+      "description": "Change polls by host and outcome over the dashboard range.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "interval": "2m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "sum by (fleet_forge_host, fleet_outcome) ((((fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\"}) * 1) unless (fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\"} offset $__range)) or increase(fleet_forge_calls_total{job=~\"$job\",fleet_forge_host=~\"$host\"}[$__range]))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "fleet_forge_host": 0,
+              "fleet_outcome": 1,
+              "Value": 2
+            },
+            "renameByName": {
+              "Value": "count"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "sortBy": [
+          {
+            "displayName": "count",
+            "desc": true
+          }
+        ]
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "ChangeRequests",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "ChangeRequest reconciles by outcome",
+      "description": "ChangeRequestController reconciles per second. Each due ChangeRequest polls its forge once.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "interval": "2m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "sum by (fleet_outcome) (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\",fleet_controller=\"ChangeRequestController\"}[$__rate_interval]))",
           "legendFormat": "{{fleet_outcome}}"
         }
       ],
@@ -1089,16 +1376,16 @@
         }
       },
       "gridPos": {
-        "x": 12,
-        "y": 11,
-        "w": 12,
+        "x": 0,
+        "y": 23,
+        "w": 8,
         "h": 8
       }
     },
     {
       "type": "timeseries",
-      "title": "Mean reconcile duration by controller",
-      "description": "Mean of one object's reconcile. Fleet v2.4 records this histogram on the SDK's default bucket bounds, which are millisecond-scale, so quantiles from its buckets are wrong. Use the Fleet traces dashboard for p50/p95.",
+      "title": "Mean ChangeRequest reconcile duration",
+      "description": "Mean ChangeRequest reconcile, including the forge poll.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1111,8 +1398,8 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum by (fleet_controller) (rate(fleet_reconcile_duration_seconds_sum{job=~\"$job\"}[$__rate_interval])) / sum by (fleet_controller) (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{fleet_controller}}"
+          "expr": "sum by (fleet_controller) (rate(fleet_reconcile_duration_seconds_sum{job=~\"$job\",fleet_controller=\"ChangeRequestController\"}[$__rate_interval])) / sum by (fleet_controller) (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\",fleet_controller=\"ChangeRequestController\"}[$__rate_interval]))",
+          "legendFormat": "mean"
         }
       ],
       "fieldConfig": {
@@ -1325,16 +1612,16 @@
         }
       },
       "gridPos": {
-        "x": 0,
-        "y": 19,
-        "w": 12,
+        "x": 8,
+        "y": 23,
+        "w": 8,
         "h": 8
       }
     },
     {
       "type": "timeseries",
-      "title": "Reconcile problems",
-      "description": "Reconciles per second that ended in error, conflict or leaseLost.",
+      "title": "Mark-ready effects by outcome",
+      "description": "markReady effects per second: Fleet marks a draft change ready on the forge.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1347,8 +1634,8 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum by (fleet_controller, fleet_outcome) (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\",fleet_outcome=~\"error|conflict|leaseLost\"}[$__rate_interval]))",
-          "legendFormat": "{{fleet_controller}} {{fleet_outcome}}"
+          "expr": "sum by (fleet_outcome) (rate(fleet_effects_total{job=~\"$job\",fleet_effect=\"markReady\"}[$__rate_interval]))",
+          "legendFormat": "{{fleet_outcome}}"
         }
       ],
       "fieldConfig": {
@@ -1356,8 +1643,8 @@
           "unit": "ops",
           "min": 0,
           "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
+            "drawStyle": "bars",
+            "fillOpacity": 60,
             "lineWidth": 1,
             "showPoints": "never",
             "spanNulls": true
@@ -1561,350 +1848,10 @@
         }
       },
       "gridPos": {
-        "x": 12,
-        "y": 19,
-        "w": 12,
-        "h": 8
-      }
-    },
-    {
-      "type": "row",
-      "title": "Effects",
-      "collapsed": false,
-      "panels": [],
-      "gridPos": {
-        "x": 0,
-        "y": 27,
-        "w": 24,
-        "h": 1
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Effects by kind and outcome",
-      "description": "External effects per second: spawn, brief, deliver, release and markReady.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "interval": "2m",
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "expr": "sum by (fleet_effect, fleet_outcome) (rate(fleet_effects_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{fleet_effect}} {{fleet_outcome}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "min": 0,
-          "custom": {
-            "drawStyle": "bars",
-            "fillOpacity": 60,
-            "lineWidth": 1,
-            "showPoints": "never",
-            "spanNulls": true,
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )error( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "red"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )failed( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "red"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )unknown( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "orange"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )leaseLost( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "orange"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )conflict( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "orange"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )throttled( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "orange"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )notLoggedIn( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "red"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )refused( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "red"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )timeout( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "orange"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )unavailable( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "orange"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )unreadable( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "orange"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "(^|.* )incomplete( .*|$)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "orange"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "mean",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 28,
-        "w": 16,
-        "h": 8
-      }
-    },
-    {
-      "type": "table",
-      "title": "Effects over the range",
-      "description": "Effects by kind and outcome over the dashboard range.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "interval": "2m",
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "expr": "sum by (fleet_effect, fleet_outcome) ((((fleet_effects_total{job=~\"$job\"}) * 1) unless (fleet_effects_total{job=~\"$job\"} offset $__range)) or increase(fleet_effects_total{job=~\"$job\"}[$__range]))",
-          "legendFormat": "__auto",
-          "instant": true,
-          "range": false,
-          "format": "table"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true
-            },
-            "indexByName": {
-              "fleet_effect": 0,
-              "fleet_outcome": 1,
-              "Value": 2
-            },
-            "renameByName": {
-              "Value": "count"
-            }
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "sortBy": [
-          {
-            "displayName": "count",
-            "desc": true
-          }
-        ]
-      },
-      "gridPos": {
         "x": 16,
-        "y": 28,
+        "y": 23,
         "w": 8,
         "h": 8
-      }
-    },
-    {
-      "type": "row",
-      "title": "Not exported yet",
-      "collapsed": false,
-      "panels": [],
-      "gridPos": {
-        "x": 0,
-        "y": 36,
-        "w": 24,
-        "h": 1
-      }
-    },
-    {
-      "type": "text",
-      "title": "Task phases",
-      "options": {
-        "mode": "markdown",
-        "content": "Fleet v2.4 exports no gauge of Tasks by phase, so this dashboard cannot show Releasing or NeedsAttention Tasks. Use `fleet list task` meanwhile."
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 37,
-        "w": 24,
-        "h": 3
       }
     }
   ]

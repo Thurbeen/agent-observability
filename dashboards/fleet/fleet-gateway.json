@@ -3,6 +3,7 @@
   "title": "Fleet Gateway and inbox",
   "description": "Inbox depth, deliveries and the Gateway controllers.",
   "tags": [
+    "agent-observability",
     "fleet"
   ],
   "editable": true,
@@ -63,11 +64,11 @@
     {
       "type": "dashboards",
       "tags": [
-        "fleet"
+        "agent-observability"
       ],
-      "title": "Fleet",
+      "title": "Agents",
       "asDropdown": true,
-      "includeVars": true,
+      "includeVars": false,
       "keepTime": true
     }
   ],

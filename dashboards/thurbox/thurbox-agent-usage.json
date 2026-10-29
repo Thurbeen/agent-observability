@@ -1,0 +1,664 @@
+{
+  "uid": "thurbox-agent-usage",
+  "title": "Agent usage",
+  "description": "Tokens and cost of the agents Thurbox launches, normalised across agents.",
+  "tags": [
+    "agent-observability",
+    "thurbox"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "schemaVersion": 41,
+  "templating": {
+    "list": [
+      {
+        "name": "prometheus",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "hide": 0,
+        "current": {},
+        "options": [],
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "agent-observability"
+      ],
+      "title": "Agents",
+      "asDropdown": true,
+      "includeVars": false,
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Over the range",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Cost by agent",
+      "description": "USD over the range, as each agent reports it. Only Claude Code exports a cost: the other agents show under Agent coverage, never as an estimate.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "interval": "2m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "sum by (thurbox_agent) ((clamp_min(last_over_time(claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}[$__range]) - last_over_time(claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}[1d] offset $__range), 0) or last_over_time(claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}[$__range])))",
+          "legendFormat": "{{thurbox_agent}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "min": 0,
+          "noValue": "none exported",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 6,
+        "h": 8
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Tokens by agent",
+      "description": "Every agent on one scale: uncached input, cache reads, cache writes and output, normalised from each agent's own token types (TOKEN_CLASSES in tools/dashboards.py).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "interval": "2m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "sum by (thurbox_agent) (label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[$__range]))), \"token_class\", \"input\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[$__range]))), \"token_class\", \"cache_read\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[$__range]))), \"token_class\", \"cache_write\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[$__range]))), \"token_class\", \"output\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[$__range]))) - sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]))), \"token_class\", \"input\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]))), \"token_class\", \"cache_read\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[$__range]))), \"token_class\", \"cache_write\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[$__range]))), \"token_class\", \"output\", \"\", \"\"))",
+          "legendFormat": "{{thurbox_agent}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "none exported",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 6,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Agent coverage",
+      "description": "Every agent Thurbox ran over the range, with what it exports. An agent with sessions and no tokens exports no usage telemetry, so it is missing from the other panels.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "interval": "2m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "max by (agent) (max_over_time((sum by (agent) (thurbox_sessions{job=\"thurbox\"}))[$__range:5m]))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "sum by (agent) (label_replace(sum by (thurbox_agent) (label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[$__range]))), \"token_class\", \"input\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[$__range]))), \"token_class\", \"cache_read\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[$__range]))), \"token_class\", \"cache_write\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[$__range]))), \"token_class\", \"output\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[$__range]))) - sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]))), \"token_class\", \"input\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]))), \"token_class\", \"cache_read\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[$__range]))), \"token_class\", \"cache_write\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[$__range]))), \"token_class\", \"output\", \"\", \"\")), \"agent\", \"$1\", \"thurbox_agent\", \"(.+)\"))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "sum by (agent) (label_replace(sum by (thurbox_agent) ((clamp_min(last_over_time(claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}[$__range]) - last_over_time(claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}[1d] offset $__range), 0) or last_over_time(claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}[$__range]))), \"agent\", \"$1\", \"thurbox_agent\", \"(.+)\"))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value #A": "peak sessions",
+              "Value #B": "tokens",
+              "Value #C": "USD"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "peak sessions",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "\u2014",
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tokens"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "USD"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "Over time",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens per hour by agent and class",
+      "description": "Normalised tokens per hour, stacked: every agent that exports usage, in one graph.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "interval": "1h",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "sum by (thurbox_agent, token_class) (label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[1h]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[1d] offset 1h), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[1h]))), \"token_class\", \"input\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[1h]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[1d] offset 1h), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[1h]))), \"token_class\", \"cache_read\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[1h]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[1d] offset 1h), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[1h]))), \"token_class\", \"cache_write\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[1h]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[1d] offset 1h), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[1h]))), \"token_class\", \"output\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[1h]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[1d] offset 1h), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[1h]))) - sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1h]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1d] offset 1h), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1h]))), \"token_class\", \"input\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1h]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1d] offset 1h), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1h]))), \"token_class\", \"cache_read\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[1h]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[1d] offset 1h), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[1h]))), \"token_class\", \"cache_write\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[1h]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[1d] offset 1h), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[1h]))), \"token_class\", \"output\", \"\", \"\"))",
+          "legendFormat": "{{thurbox_agent}} {{token_class}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )error( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )failed( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )unknown( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )leaseLost( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )conflict( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )throttled( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )notLoggedIn( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )refused( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )timeout( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )unavailable( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )unreadable( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(^|.* )incomplete( .*|$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 14,
+        "h": 10
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top sessions",
+      "description": "Thurbox sessions by normalised tokens over the range, every agent together, with the cost where the agent reports one.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "interval": "2m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "topk(15, sum by (thurbox_session_name, thurbox_agent) (label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"input\"}[$__range]))), \"token_class\", \"input\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheRead\"}[$__range]))), \"token_class\", \"cache_read\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"cacheCreation\"}[$__range]))), \"token_class\", \"cache_write\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[$__range]) - last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[1d] offset $__range), 0) or last_over_time(claude_code_token_usage_tokens_total{thurbox_agent!=\"\",type=\"output\"}[$__range]))), \"token_class\", \"output\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"input\"}[$__range]))) - sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]))), \"token_class\", \"input\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cached_input\"}[$__range]))), \"token_class\", \"cache_read\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"cache_write_input\"}[$__range]))), \"token_class\", \"cache_write\", \"\", \"\") or label_replace( sum by (thurbox_agent, thurbox_session_id, thurbox_session_name) ((clamp_min(last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[$__range]) - last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[1d] offset $__range), 0) or last_over_time(codex_turn_token_usage_sum{thurbox_agent!=\"\",token_type=\"output\"}[$__range]))), \"token_class\", \"output\", \"\", \"\")))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "sum by (thurbox_session_name, thurbox_agent) ((clamp_min(last_over_time(claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}[$__range]) - last_over_time(claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}[1d] offset $__range), 0) or last_over_time(claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}[$__range])))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "thurbox_session_name": "session",
+              "thurbox_agent": "agent",
+              "Value #A": "tokens",
+              "Value #B": "USD"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "tokens",
+                "desc": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "exclude",
+            "match": "any",
+            "filters": [
+              {
+                "fieldName": "tokens",
+                "config": {
+                  "id": "isNull",
+                  "options": {}
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "\u2014",
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tokens"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "USD"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 10,
+        "w": 10,
+        "h": 10
+      }
+    }
+  ]
+}

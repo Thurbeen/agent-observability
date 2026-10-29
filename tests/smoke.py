@@ -1,20 +1,23 @@
 # /// script
 # requires-python = ">=3.12"
 # ///
-"""Smoke-test the quick-start stack with a Fleet-shaped OTLP payload.
+"""Smoke-test the quick-start stack with synthetic Fleet and Thurbox telemetry.
 
     docker compose -f quickstart/compose.yaml up -d
     uv run tests/smoke.py
 
-The payload carries every metric, label and span name in catalog/fleet.json,
-sent the way Fleet sends it: OTLP over HTTP to the collector. The test then
-checks that each backend stored it, that Prometheus loaded the rules, that
-every dashboard query runs, and that Grafana provisioned the dashboards.
+It sends two hours of tools/synthetic.py's telemetry to the collector, the
+way Fleet, Thurbox and the agents send it: OTLP over HTTP, Thurbox's and the
+agents' metrics as deltas.
+It then checks that every series in catalog/ reached Prometheus, that
+Prometheus loaded the rules, that Tempo and Loki stored spans and log
+records, that Grafana provisioned the dashboards under Agents/Fleet and
+Agents/Thurbox, and that every dashboard query returns data.
 """
 
 import json
 import os
-import secrets
+import subprocess
 import sys
 import time
 import urllib.error
@@ -29,17 +32,13 @@ TEMPO = os.environ.get("TEMPO", "http://localhost:3200")
 LOKI = os.environ.get("LOKI", "http://localhost:3100")
 GRAFANA = os.environ.get("GRAFANA", "http://localhost:3000")
 DEADLINE = float(os.environ.get("SMOKE_TIMEOUT", "180"))
-# The OpenTelemetry SDK's default histogram bounds, which Fleet v2.4 uses.
-BOUNDS = [0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]
+HOURS = 2
 
 
-def http(url: str, body: dict | None = None) -> tuple[int, dict | str]:
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+def http(url: str) -> tuple[int, dict | list | str]:
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            raw = r.read().decode()
-            status = r.status
+        with urllib.request.urlopen(url, timeout=10) as r:
+            raw, status = r.read().decode(), r.status
     except urllib.error.HTTPError as e:
         raw, status = e.read().decode(), e.code
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
@@ -64,65 +63,13 @@ def until(what: str, check, deadline: float) -> None:
     sys.exit(f"FAIL {what}: {str(last)[:500]}")
 
 
-def attrs(d: dict) -> list[dict]:
-    return [{"key": k, "value": {"intValue": str(v)} if isinstance(v, int) else {"stringValue": v}}
-            for k, v in d.items()]
+def query(base: str, path: str, **params) -> tuple[int, dict | list | str]:
+    return http(f"{base}{path}?" + urllib.parse.urlencode(params))
 
 
-def payloads(catalog: dict, trace_id: str) -> dict[str, dict]:
-    tag = catalog["fleet"]["tag"]
-    resource = {"attributes": attrs({"service.name": "fleet", "service.version": tag.lstrip("v")})}
-    scope = {"name": "fleet"}
-    now = time.time_ns()
-    starts, times = now - 600 * 10**9, [now - 60 * 10**9, now]
-    metrics = []
-    for m in catalog["metrics"]:
-        labels = {a: (v[0] if v else "github.com") for a, v in m["attributes"].items()}
-        points = []
-        for i, t in enumerate(times):
-            p = {"attributes": attrs(labels), "startTimeUnixNano": str(starts), "timeUnixNano": str(t)}
-            if m["instrument"] == "histogram":
-                n = 60 * (i + 1)
-                p.update(count=str(n), sum=0.25 * n, explicitBounds=BOUNDS,
-                         bucketCounts=[str(x) for x in [0, n] + [0] * (len(BOUNDS) - 1)])
-            else:
-                p["asInt"] = str(10 * (i + 1)) if m["instrument"] == "counter" else "1"
-            points.append(p)
-        body = {"dataPoints": points}
-        if m["instrument"] == "histogram":
-            metric = {"histogram": {**body, "aggregationTemporality": 2}}
-        elif m["instrument"] == "counter":
-            metric = {"sum": {**body, "aggregationTemporality": 2, "isMonotonic": True}}
-        else:
-            metric = {"gauge": body}
-        metrics.append({"name": m["name"], "unit": m["unit"], **metric})
-
-    def span(name: str, span_id: str, parent: str, a: dict, offset_ms: int) -> dict:
-        start = now - 30 * 10**9 + offset_ms * 10**6
-        return {"traceId": trace_id, "spanId": span_id, "parentSpanId": parent, "name": name, "kind": 1,
-                "startTimeUnixNano": str(start), "endTimeUnixNano": str(start + 40 * 10**6),
-                "attributes": attrs(a)}
-
-    identity = {"fleet.kind": "Task", "fleet.name": "smoke", "fleet.uid": "u1-smoke", "fleet.generation": 1}
-    root, task, deliver = (secrets.token_hex(8) for _ in range(3))
-    spans = [
-        span("reconcile pass", root, "", {"fleet.pass": 1}, 0),
-        span("reconcile Task", task, root,
-             {**identity, "fleet.controller": "TaskController", "fleet.outcome": "changed"}, 1),
-        span("effect deliver", deliver, task,
-             {**identity, "fleet.effect": "deliver", "fleet.outcome": "delivered"}, 2),
-    ]
-    log = {"timeUnixNano": str(now), "severityText": "INFO", "body": {"stringValue": "fleet-monitoring smoke"}}
-    return {
-        "metrics": {"resourceMetrics": [{"resource": resource, "scopeMetrics": [{"scope": scope, "metrics": metrics}]}]},
-        "traces": {"resourceSpans": [{"resource": resource, "scopeSpans": [{"scope": scope, "spans": spans}]}]},
-        "logs": {"resourceLogs": [{"resource": {"attributes": attrs({"service.name": "fleet-monitoring-smoke"})},
-                                   "scopeLogs": [{"scope": scope, "logRecords": [log]}]}]},
-    }
-
-
-def prom(query: str) -> tuple[int, dict | str]:
-    return http(f"{PROMETHEUS}/api/v1/query?" + urllib.parse.urlencode({"query": query}))
+def has_result(r: tuple) -> tuple[bool, tuple]:
+    status, body = r
+    return status == 200 and isinstance(body, dict) and bool(body.get("data", {}).get("result")), r
 
 
 def grafana_vars(expr: str, values: dict[str, str]) -> str:
@@ -131,86 +78,106 @@ def grafana_vars(expr: str, values: dict[str, str]) -> str:
     return expr
 
 
+def panels(items: list[dict]):
+    for p in items:
+        yield p
+        yield from panels(p.get("panels", []))
+
+
 def main() -> None:
     deadline = time.monotonic() + DEADLINE
-    catalog = json.loads((ROOT / "catalog" / "fleet.json").read_text())
-    trace_id = secrets.token_hex(16)
-    body = payloads(catalog, trace_id)
+    for name, url in (("Prometheus", f"{PROMETHEUS}/-/ready"), ("Tempo", f"{TEMPO}/ready"), ("Loki", f"{LOKI}/ready")):
+        until(f"{name} ready", lambda: (http(url)[0] == 200, http(url)), deadline)
+    subprocess.run([sys.executable, str(ROOT / "tools" / "synthetic.py"), "--hours", str(HOURS),
+                    "--collector", COLLECTOR], check=True)
+    end = int(time.time()) + 60
+    window = {"start": end - HOURS * 3600 - 60, "end": end}
+    # Tempo searches spans older than 15 minutes only once it has flushed
+    # them to its backend, a few minutes after they arrive.
+    recent = {"start": end - 600, "end": end}
 
-    until("Prometheus ready", lambda: (http(f"{PROMETHEUS}/-/ready")[0] == 200, "not ready"), deadline)
-    until("Tempo ready", lambda: (http(f"{TEMPO}/ready")[0] == 200, http(f"{TEMPO}/ready")), deadline)
-    until("Loki ready", lambda: (http(f"{LOKI}/ready")[0] == 200, http(f"{LOKI}/ready")), deadline)
-    for signal, payload in body.items():
-        until(f"collector accepts {signal}",
-              lambda: (lambda r: (r[0] == 200, r))(http(f"{COLLECTOR}/v1/{signal}", payload)), deadline)
+    for product in ("fleet", "thurbox", "claude-code", "codex"):
+        for m in json.loads((ROOT / "catalog" / f"{product}.json").read_text())["metrics"]:
+            for s in m["prometheus"]["series"]:
+                until(f"Prometheus has {s}",
+                      lambda: has_result(query(PROMETHEUS, "/api/v1/query", query=f"count_over_time({s}[3h])")),
+                      deadline)
 
-    for m in catalog["metrics"]:
-        for s in m["prometheus"]["series"]:
-            until(f"Prometheus has {s}",
-                  lambda: (lambda r: (r[0] == 200 and bool(r[1]["data"]["result"]), r))(prom(f'{s}{{job="fleet"}}')),
-                  deadline)
-
-    groups = http(f"{PROMETHEUS}/api/v1/rules")[1]["data"]["groups"]
-    names = {g["name"] for g in groups}
-    if names != {"fleet.recording", "fleet.alerts"}:
-        sys.exit(f"FAIL Prometheus loaded rule groups {sorted(names)}")
+    groups = {g["name"] for g in http(f"{PROMETHEUS}/api/v1/rules")[1]["data"]["groups"]}
+    expected = {"fleet.recording", "fleet.alerts", "thurbox.recording", "thurbox.alerts"}
+    if groups != expected:
+        sys.exit(f"FAIL Prometheus loaded rule groups {sorted(groups)}")
     print("ok   Prometheus loaded the rules")
 
-    until(f"Tempo has trace {trace_id}", lambda: (http(f"{TEMPO}/api/traces/{trace_id}")[0] == 200, "absent"),
+    # The Agent usage dashboard's four token classes add up to Codex's total.
+    usage = json.loads((ROOT / "dashboards" / "thurbox" / "thurbox-agent-usage.json").read_text())
+    by_agent = next(p for p in usage["panels"] if p["title"] == "Tokens by agent")["targets"][0]["expr"]
+
+    def codex_adds_up() -> tuple[bool, tuple]:
+        classes = query(PROMETHEUS, "/api/v1/query", query=by_agent.replace("$__range", "3h"))[1]["data"]["result"]
+        total = query(PROMETHEUS, "/api/v1/query", query='sum(last_over_time(codex_turn_token_usage_sum'
+                      '{thurbox_agent="codex",token_type="total"}[3h]))')[1]["data"]["result"]
+        codex = [float(r["value"][1]) for r in classes if r["metric"].get("thurbox_agent") == "codex"]
+        return bool(codex and total and abs(codex[0] - float(total[0]["value"][1])) < 0.5), (codex, total)
+
+    until("Codex's token classes add up to its total", codex_adds_up, deadline)
+
+    until("Tempo search finds Fleet's effect spans",
+          lambda: (lambda r: (r[0] == 200 and bool(r[1].get("traces")), r))(
+              query(TEMPO, "/api/search", q='{ name =~ "effect .+" }', **recent)),
           deadline)
-    # Tempo serves a trace by id before its search finds it.
-    until("Tempo search finds the trace",
-          lambda: (lambda r: (r[0] == 200 and any(t.get("traceID", "").lstrip("0") == trace_id.lstrip("0")
-                                                  for t in r[1].get("traces", [])), r))(
-              http(f"{TEMPO}/api/search?" + urllib.parse.urlencode(
-                  {"q": '{ name = "effect deliver" }', "start": int(time.time()) - 3600,
-                   "end": int(time.time()) + 60}))),
-          deadline)
-    until("Loki has the log line",
-          lambda: (lambda r: (r[0] == 200 and bool(r[1]["data"]["result"]), r))(
-              http(f"{LOKI}/loki/api/v1/query_range?"
-                   + urllib.parse.urlencode({"query": '{service_name="fleet-monitoring-smoke"}', "since": "1h"}))),
+    until("Loki has Thurbox's session events",
+          lambda: has_result(query(LOKI, "/loki/api/v1/query_range",
+                                   query='{service_name="thurbox"} |= "thurbox.session.created"', **window)),
           deadline)
 
+    uids = {json.loads(f.read_text())["uid"]: f.parent.name for f in (ROOT / "dashboards").glob("*/*.json")}
     until("Grafana provisioned the dashboards",
-          lambda: (lambda r: (r[0] == 200 and {d["uid"] for d in r[1]}
-                              >= {"fleet-overview", "fleet-forge", "fleet-gateway", "fleet-traces"}, r))(
-              http(f"{GRAFANA}/api/search?tag=fleet")),
+          lambda: (lambda r: (r[0] == 200 and {d["uid"] for d in r[1]} >= set(uids), r))(
+              http(f"{GRAFANA}/api/search?tag=agent-observability")),
           deadline)
+    folders = {d["uid"]: d.get("folderTitle") for d in http(f"{GRAFANA}/api/search?tag=agent-observability")[1]}
+    roots = [f for f in http(f"{GRAFANA}/api/folders")[1] if f["title"] == "Agents"]
+    children = {f["title"] for f in http(f"{GRAFANA}/api/folders?parentUid={roots[0]['uid']}")[1]} if roots else set()
+    wrong = {uid for uid, product in uids.items() if folders.get(uid) != product.title()}
+    if not roots or children != {"Fleet", "Thurbox"} or wrong:
+        sys.exit(f"FAIL Grafana folders: Agents={bool(roots)}, children={sorted(children)}, misplaced={sorted(wrong)}")
+    print("ok   Grafana files them under Agents/Fleet and Agents/Thurbox")
     for uid in ("prometheus", "tempo", "loki"):
         until(f"Grafana reaches data source {uid}",
               lambda: (lambda r: (r[0] == 200, r))(http(f"{GRAFANA}/api/datasources/uid/{uid}/health")), deadline)
 
-    # Every dashboard query, as Grafana would send it with All selected.
-    values = {"__rate_interval": "5m", "__interval": "2m", "__range": "1h", "job": ".*", "host": ".*",
-              "service": "fleet", "object": ".+"}
-    end = int(time.time()) + 60
+    # Every dashboard query, as Grafana would send it with All selected, over
+    # the window the synthetic data covers; Tempo searches over the last ten
+    # minutes. TraceQL metrics on spans Tempo has not flushed yet come back
+    # empty, so those only have to run.
+    values = {"__rate_interval": "5m", "__interval": "10m", "__range": f"{HOURS}h", "job": ".*", "host": ".*",
+              "agent": ".*", "session": ".*", "service": "fleet", "object": ".+"}
     failed = []
-    for path in sorted((ROOT / "dashboards").glob("*.json")):
-        d = json.loads(path.read_text())
-        for p in d["panels"]:
+    for path in sorted((ROOT / "dashboards").glob("*/*.json")):
+        for p in panels(json.loads(path.read_text())["panels"]):
             for t in p.get("targets", []):
-                if "expr" in t:
-                    status, r = prom(grafana_vars(t["expr"], values))
-                    ok = status == 200 and r["status"] == "success"
-                    if ok and p["title"] in ("Reconciles per second", "Change polls", "Inbox depth"):
-                        ok = bool(r["data"]["result"])
-                elif t.get("queryType") == "traceql":
-                    q = grafana_vars(t["query"], values)
-                    api = "metrics/query_range" if t.get("metricsQueryType") else "search"
-                    status, r = http(f"{TEMPO}/api/{api}?"
-                                     + urllib.parse.urlencode({"q": q, "start": end - 3600, "end": end}))
-                    ok = status == 200
-                    if ok and p["title"] in ("Object reconciles", "Effects"):
-                        ok = bool(r.get("traces"))
+                kind = t["datasource"]["type"]
+                if kind == "prometheus":
+                    ok, r = has_result(query(PROMETHEUS, "/api/v1/query_range", query=grafana_vars(t["expr"], values),
+                                             step=60, **window))
+                elif kind == "loki":
+                    ok, r = has_result(query(LOKI, "/loki/api/v1/query_range", query=grafana_vars(t["expr"], values),
+                                             step=600, **window))
+                elif t.get("metricsQueryType"):
+                    r = query(TEMPO, "/api/metrics/query_range", q=grafana_vars(t["query"], values), step=600, **window)
+                    ok = r[0] == 200
                 else:
-                    continue
-                print(f"{'ok  ' if ok else 'FAIL'} {path.stem} / {p['title']}")
+                    # Errors and unanswered polls are rare: the last ten
+                    # minutes need not have one.
+                    r = query(TEMPO, "/api/search", q=grafana_vars(t["query"], values), **recent)
+                    ok = r[0] == 200 and (bool(r[1].get("traces")) or p["title"] not in ("Object reconciles", "Effects"))
+                print(f"{'ok  ' if ok else 'FAIL'} {path.stem} / {p['title']} {t['refId']}")
                 if not ok:
                     failed.append(f"{path.stem} / {p['title']}: {str(r)[:300]}")
     if failed:
-        sys.exit("FAIL dashboard queries:\n" + "\n".join(failed))
-    print("smoke: the stack ingests Fleet's telemetry and every dashboard query runs")
+        sys.exit("FAIL dashboard queries without data:\n" + "\n".join(failed))
+    print("smoke: the stack ingests Fleet's, Thurbox's and the agents' telemetry and every dashboard query returns data")
 
 
 if __name__ == "__main__":

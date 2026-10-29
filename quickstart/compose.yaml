@@ -1,17 +1,17 @@
-# A local stack to try the dashboards: Fleet -> collector -> Prometheus,
-# Tempo and Loki -> Grafana. Every port binds to 127.0.0.1 only, and Grafana
+# A local stack to try the dashboards: Fleet and Thurbox -> collector ->
+# Prometheus, Tempo and Loki -> Grafana. Every port binds to 127.0.0.1 only, and Grafana
 # lets anyone on this machine in as an admin. Do not expose it. Set
 # COLLECTOR_PORT, PROMETHEUS_PORT, TEMPO_PORT, LOKI_PORT or GRAFANA_PORT to
 # move a port that is taken.
 #
 #   docker compose -f quickstart/compose.yaml up -d
 #   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 fleet up
-#   open http://localhost:3000/dashboards/f/fleet
-name: fleet-monitoring
+#   open http://localhost:3000/dashboards
+name: agent-observability
 
 services:
   collector:
-    image: otel/opentelemetry-collector:0.164.0@sha256:28b6d41ac51bff6b41ba5e8fe503569ffb9d6a1ea90f7a78419e86f34e44f750
+    image: otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ../collector/otelcol.yaml:/etc/otelcol/config.yaml:ro
@@ -52,7 +52,8 @@ services:
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ../dashboards:/var/lib/grafana/dashboards/fleet:ro
+      - ../dashboards/fleet:/var/lib/grafana/dashboards/Agents/Fleet:ro
+      - ../dashboards/thurbox:/var/lib/grafana/dashboards/Agents/Thurbox:ro
     ports:
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     depends_on: [prometheus, tempo, loki]

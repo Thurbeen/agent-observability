@@ -36,7 +36,7 @@ tests:
             exp_annotations:
               summary: "Fleet manager fleet has not reconciled for 15 minutes"
               description: "No object reconcile was recorded, or no metrics arrived. Tasks are not progressing."
-              runbook_url: https://github.com/Thurbeen/fleet-monitoring/blob/main/docs/runbook.md#fleetnotreconciling
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetnotreconciling
       - {eval_time: 90m, alertname: FleetNotReconciling, exp_alerts: *not_reconciling}
 
   - name: reconcile errors above 5%
@@ -54,7 +54,7 @@ tests:
             exp_annotations:
               summary: "16.67% of Fleet reconciles fail on fleet"
               description: "More than 5% of object reconciles ended in error for 15 minutes."
-              runbook_url: https://github.com/Thurbeen/fleet-monitoring/blob/main/docs/runbook.md#fleetreconcileerrors
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetreconcileerrors
 
   - name: forge throttling and a lost login
     interval: 1m
@@ -71,7 +71,7 @@ tests:
             exp_annotations:
               summary: "github.com throttles Fleet's change polls"
               description: "The forge throttled polls from fleet for 30 minutes. ChangeRequest updates are delayed."
-              runbook_url: https://github.com/Thurbeen/fleet-monitoring/blob/main/docs/runbook.md#fleetforgethrottled
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetforgethrottled
       - eval_time: 40m
         alertname: FleetForgeNotLoggedIn
         exp_alerts:
@@ -79,7 +79,7 @@ tests:
             exp_annotations:
               summary: "Fleet cannot read changes on gitlab.example"
               description: "Change polls from fleet fail on the forge login or permissions."
-              runbook_url: https://github.com/Thurbeen/fleet-monitoring/blob/main/docs/runbook.md#fleetforgenotloggedin
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetforgenotloggedin
 
   - name: failed effects and an inbox that never drains
     interval: 1m
@@ -96,7 +96,7 @@ tests:
             exp_annotations:
               summary: "Fleet spawn effects fail on fleet"
               description: "At least one spawn effect failed in the last 15 minutes."
-              runbook_url: https://github.com/Thurbeen/fleet-monitoring/blob/main/docs/runbook.md#fleeteffectsfailing
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleeteffectsfailing
       - {eval_time: 30m, alertname: FleetEffectsFailing, exp_alerts: []}
       - {eval_time: 20m, alertname: FleetInboxBacklog, exp_alerts: []}
       - eval_time: 80m
@@ -106,4 +106,4 @@ tests:
             exp_annotations:
               summary: "Fleet inbox entries on fleet waited for an hour"
               description: "The inbox depth stayed at 2 or more for an hour."
-              runbook_url: https://github.com/Thurbeen/fleet-monitoring/blob/main/docs/runbook.md#fleetinboxbacklog
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetinboxbacklog

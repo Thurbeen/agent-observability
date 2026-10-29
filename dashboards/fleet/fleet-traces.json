@@ -3,6 +3,7 @@
   "title": "Fleet traces",
   "description": "Reconcile, effect and forge spans in Tempo.",
   "tags": [
+    "agent-observability",
     "fleet"
   ],
   "editable": true,
@@ -62,11 +63,11 @@
     {
       "type": "dashboards",
       "tags": [
-        "fleet"
+        "agent-observability"
       ],
-      "title": "Fleet",
+      "title": "Agents",
       "asDropdown": true,
-      "includeVars": true,
+      "includeVars": false,
       "keepTime": true
     }
   ],

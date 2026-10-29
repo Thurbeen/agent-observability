@@ -9,7 +9,7 @@ repos:
         pass_filenames: false
         files: ^(tools/dashboards\.py|dashboards/)
       - id: lint
-        name: Dashboards and rules name only what Fleet exports
+        name: Dashboards and rules name only what Fleet and Thurbox export
         entry: uv run tools/lint.py
         language: system
         pass_filenames: false
