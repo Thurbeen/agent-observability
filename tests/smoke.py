@@ -158,6 +158,14 @@ def main() -> None:
 
     until(f"Tempo has trace {trace_id}", lambda: (http(f"{TEMPO}/api/traces/{trace_id}")[0] == 200, "absent"),
           deadline)
+    # Tempo serves a trace by id before its search finds it.
+    until("Tempo search finds the trace",
+          lambda: (lambda r: (r[0] == 200 and any(t.get("traceID", "").lstrip("0") == trace_id.lstrip("0")
+                                                  for t in r[1].get("traces", [])), r))(
+              http(f"{TEMPO}/api/search?" + urllib.parse.urlencode(
+                  {"q": '{ name = "effect deliver" }', "start": int(time.time()) - 3600,
+                   "end": int(time.time()) + 60}))),
+          deadline)
     until("Loki has the log line",
           lambda: (lambda r: (r[0] == 200 and bool(r[1]["data"]["result"]), r))(
               http(f"{LOKI}/loki/api/v1/query_range?"
