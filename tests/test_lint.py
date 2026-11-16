@@ -113,6 +113,15 @@ class SpanCoverage(unittest.TestCase):
         self.assertNotIn('dashboards: no dashboard queries the span "runtime X" a catalog lists', problems)
         self.assertNotIn('dashboards: no dashboard queries the span "workspace-git X" a catalog lists', problems)
         self.assertIn('dashboards: no dashboard queries the span "runtime-mux X" a catalog lists', problems)
+class GatewayDashboard(unittest.TestCase):
+    def test_gateway_panels_include_every_gateway_controller(self):
+        board = json.loads((ROOT / "dashboards" / "fleet" / "fleet-gateway.json").read_text())
+        exprs = [t["expr"] for p in lint.panels(board["panels"]) if p.get("title", "").startswith(("Gateway", "Mean Gateway"))
+                 for t in p.get("targets", [])]
+        self.assertTrue(exprs)
+        for expr in exprs:
+            for controller in ("ConversationController", "ListenerController", "GatewayController"):
+                self.assertIn(controller, expr)
 
 
 class Repository(unittest.TestCase):
