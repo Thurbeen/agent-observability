@@ -81,9 +81,11 @@ class Fleet:
     """One Fleet v2 manager: cumulative metrics, spans."""
 
     KINDS = {"TaskController": "Task", "ChangeRequestController": "ChangeRequest", "ForgeController": "Forge",
-             "ConversationController": "Conversation", "ListenerController": "Listener"}
+             "ConversationController": "Conversation", "ListenerController": "Listener",
+             "GatewayController": "Task"}
     LOAD = {"TaskController": (9, 0.045), "ChangeRequestController": (4, 0.42), "ForgeController": (2, 0.12),
-            "ConversationController": (3, 0.02), "ListenerController": (1, 0.008)}
+            "ConversationController": (3, 0.02), "ListenerController": (1, 0.008),
+            "GatewayController": (2, 0.004)}
     TASKS = ["docs-refresh", "fix-flaky-test", "renovate-sweep", "release-notes", "api-pagination",
              "cache-eviction", "ci-speedup", "otel-upgrade", "login-timeout"]
     AGENTS = ["claude", "claude", "codex", "claude", "opencode", "codex", "claude", "pi", "claude"]
@@ -144,7 +146,8 @@ class Fleet:
         pass_total, children = 0.0, []
         for controller, (n, mean) in self.LOAD.items():
             for k in range(n * 2):
-                o = self.outcome(controller)
+                ends_with_effect = i == self.steps and controller == "TaskController" and k == 0
+                o = "changed" if ends_with_effect else self.outcome(controller)
                 d = rng.lognormvariate(math.log(mean), 0.5)
                 self.reconciles[(controller, o)].append(d)
                 if k < n:
@@ -163,7 +166,7 @@ class Fleet:
                 fo = self.forge_outcome(i, host)
                 span("forge poll", sid, offset + 10**6, d * 0.9, {"fleet.forge.host": host, "fleet.outcome": fo},
                      error=fo not in ("known", "absent"))
-            if kind == "Task" and o == "changed":
+            if controller == "TaskController" and o == "changed":
                 effect, eo = self.effect(i)
                 if effect:
                     d_effect = rng.uniform(0.05, 0.9)
@@ -229,7 +232,7 @@ class Fleet:
         return o
 
     def effect(self, i: int) -> tuple[str | None, str]:
-        r = self.rng.random()
+        r = 0.0 if i == self.steps else self.rng.random()
         if r < 0.25:
             effect, o = "deliver", "delivered" if self.rng.random() < 0.93 else "already"
         elif r < 0.33:

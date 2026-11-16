@@ -759,7 +759,7 @@
     {
       "type": "timeseries",
       "title": "Gateway reconciles by controller and outcome",
-      "description": "ConversationController relays conversations into Task inboxes; ListenerController keeps Gateway listeners.",
+      "description": "ConversationController relays conversations into Task inboxes; ListenerController keeps Gateway listeners; GatewayController ties each Task to its chat thread.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -772,7 +772,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum by (fleet_controller, fleet_outcome) (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\",fleet_controller=~\"ConversationController|ListenerController\"}[$__rate_interval]))",
+          "expr": "sum by (fleet_controller, fleet_outcome) (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\",fleet_controller=~\"ConversationController|ListenerController|GatewayController\"}[$__rate_interval]))",
           "legendFormat": "{{fleet_controller}} {{fleet_outcome}}"
         }
       ],
@@ -999,7 +999,7 @@
     {
       "type": "timeseries",
       "title": "Mean Gateway reconcile duration",
-      "description": "Mean reconcile of a Conversation or a Listener.",
+      "description": "Mean reconcile of a Conversation, a Listener, or a Task's chat thread.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1012,7 +1012,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum by (fleet_controller) (rate(fleet_reconcile_duration_seconds_sum{job=~\"$job\",fleet_controller=~\"ConversationController|ListenerController\"}[$__rate_interval])) / sum by (fleet_controller) (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\",fleet_controller=~\"ConversationController|ListenerController\"}[$__rate_interval]))",
+          "expr": "sum by (fleet_controller) (rate(fleet_reconcile_duration_seconds_sum{job=~\"$job\",fleet_controller=~\"ConversationController|ListenerController|GatewayController\"}[$__rate_interval])) / sum by (fleet_controller) (rate(fleet_reconcile_duration_seconds_count{job=~\"$job\",fleet_controller=~\"ConversationController|ListenerController|GatewayController\"}[$__rate_interval]))",
           "legendFormat": "{{fleet_controller}}"
         }
       ],

@@ -343,7 +343,7 @@ def forge() -> dict:
 
 
 def gateway() -> dict:
-    gw = 'fleet_controller=~"ConversationController|ListenerController"'
+    gw = 'fleet_controller=~"ConversationController|ListenerController|GatewayController"'
     deliver = 'fleet_effect="deliver"'
     b = Board()
     b.row("Inbox")
@@ -368,10 +368,11 @@ def gateway() -> dict:
                  [target(rate("fleet_reconcile_duration_seconds_count", gw, by="fleet_controller, fleet_outcome"),
                          "{{fleet_controller}} {{fleet_outcome}}")],
                  "ConversationController relays conversations into Task inboxes; ListenerController keeps "
-                 "Gateway listeners.", unit="ops", stack=True), 12, 8)
+                 "Gateway listeners; GatewayController ties each Task to its chat thread.",
+                 unit="ops", stack=True), 12, 8)
     b.add(series("Mean Gateway reconcile duration",
                  [target(mean_duration(gw, by="fleet_controller"), "{{fleet_controller}}")],
-                 "Mean reconcile of a Conversation or a Listener.", unit="s"), 12, 8)
+                 "Mean reconcile of a Conversation, a Listener, or a Task's chat thread.", unit="s"), 12, 8)
     return dashboard("fleet-gateway", "Fleet Gateway and inbox",
                      "Inbox depth, deliveries and the Gateway controllers.", b,
                      [datasource_var("prometheus", "prometheus", "Prometheus"), JOB_VAR])
