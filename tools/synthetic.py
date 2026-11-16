@@ -176,9 +176,10 @@ class Fleet:
                     msid = span(f"runtime-mux {verb}", rsid, offset + 4 * 10**6, d_effect * 0.7,
                                 {"runtime.verb": verb, "runtime.outcome": ro}, error=ro == "unknown",
                                 into=callees["runtime-mux"])
-                    if verb == "start":
-                        span("workspace-git make", msid, offset + 5 * 10**6, d_effect * 0.4,
-                             {"workspace.verb": "make"}, into=callees["workspace-git"])
+                    workspace_verb = {"start": "make", "release": "release"}.get(verb)
+                    if workspace_verb:
+                        span(f"workspace-git {workspace_verb}", msid, offset + 5 * 10**6, d_effect * 0.4,
+                             {"workspace.verb": workspace_verb}, into=callees["workspace-git"])
             offset += int(d * 1e9)
         # Rare outcomes, once each at a fixed point, so any run shows them.
         if i == int(self.steps * 0.5):
