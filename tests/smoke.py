@@ -7,7 +7,7 @@
     uv run tests/smoke.py
 
 It sends two hours of tools/synthetic.py's telemetry to the collector, the
-way Fleet, Thurbox and the agents send it: OTLP over HTTP, Thurbox's and the
+way Fleet, the thurbox interface and the agents send it: OTLP over HTTP, the
 agents' metrics as deltas.
 It then checks that every series in catalog/ reached Prometheus, that
 Prometheus loaded the rules, that Tempo and Loki stored spans and log
@@ -104,20 +104,19 @@ def main() -> None:
                       deadline)
 
     groups = {g["name"] for g in http(f"{PROMETHEUS}/api/v1/rules")[1]["data"]["groups"]}
-    expected = {"fleet.recording", "fleet.alerts", "thurbox.recording", "thurbox.alerts"}
+    expected = {"fleet.recording", "fleet.alerts"}
     if groups != expected:
         sys.exit(f"FAIL Prometheus loaded rule groups {sorted(groups)}")
     print("ok   Prometheus loaded the rules")
 
-    # The Agent usage dashboard's four token classes add up to Codex's total.
     usage = json.loads((ROOT / "dashboards" / "thurbox" / "thurbox-agent-usage.json").read_text())
     by_agent = next(p for p in usage["panels"] if p["title"] == "Tokens by agent")["targets"][0]["expr"]
 
     def codex_adds_up() -> tuple[bool, tuple]:
         classes = query(PROMETHEUS, "/api/v1/query", query=by_agent.replace("$__range", "3h"))[1]["data"]["result"]
         total = query(PROMETHEUS, "/api/v1/query", query='sum(last_over_time(codex_turn_token_usage_sum'
-                      '{thurbox_agent="codex",token_type="total"}[3h]))')[1]["data"]["result"]
-        codex = [float(r["value"][1]) for r in classes if r["metric"].get("thurbox_agent") == "codex"]
+                      '{fleet_task!="",token_type="total"}[3h]))')[1]["data"]["result"]
+        codex = [float(r["value"][1]) for r in classes if r["metric"].get("agent") == "codex"]
         return bool(codex and total and abs(codex[0] - float(total[0]["value"][1])) < 0.5), (codex, total)
 
     until("Codex's token classes add up to its total", codex_adds_up, deadline)
@@ -126,9 +125,9 @@ def main() -> None:
           lambda: (lambda r: (r[0] == 200 and bool(r[1].get("traces")), r))(
               query(TEMPO, "/api/search", q='{ name =~ "effect .+" }', **recent)),
           deadline)
-    until("Loki has Thurbox's session events",
-          lambda: has_result(query(LOKI, "/loki/api/v1/query_range",
-                                   query='{service_name="thurbox"} |= "thurbox.session.created"', **window)),
+    until("Tempo search finds the interface's fleet command spans",
+          lambda: (lambda r: (r[0] == 200 and bool(r[1].get("traces")), r))(
+              query(TEMPO, "/api/search", q='{ resource.service.name = "thurbox" && name =~ "fleet .+" }', **recent)),
           deadline)
 
     uids = {json.loads(f.read_text())["uid"]: f.parent.name for f in (ROOT / "dashboards").glob("*/*.json")}
@@ -152,7 +151,7 @@ def main() -> None:
     # minutes. TraceQL metrics on spans Tempo has not flushed yet come back
     # empty, so those only have to run.
     values = {"__rate_interval": "5m", "__interval": "10m", "__range": f"{HOURS}h", "job": ".*", "host": ".*",
-              "agent": ".*", "session": ".*", "service": "fleet", "object": ".+"}
+              "service": "fleet", "object": ".+"}
     failed = []
     for path in sorted((ROOT / "dashboards").glob("*/*.json")):
         for p in panels(json.loads(path.read_text())["panels"]):
@@ -171,13 +170,14 @@ def main() -> None:
                     # Errors and unanswered polls are rare: the last ten
                     # minutes need not have one.
                     r = query(TEMPO, "/api/search", q=grafana_vars(t["query"], values), **recent)
-                    ok = r[0] == 200 and (bool(r[1].get("traces")) or p["title"] not in ("Object reconciles", "Effects"))
+                    ok = r[0] == 200 and (bool(r[1].get("traces")) or p["title"] not in
+                                          ("Object reconciles", "Effects", "Slowest fleet commands"))
                 print(f"{'ok  ' if ok else 'FAIL'} {path.stem} / {p['title']} {t['refId']}")
                 if not ok:
                     failed.append(f"{path.stem} / {p['title']}: {str(r)[:300]}")
     if failed:
         sys.exit("FAIL dashboard queries without data:\n" + "\n".join(failed))
-    print("smoke: the stack ingests Fleet's, Thurbox's and the agents' telemetry and every dashboard query returns data")
+    print("smoke: the stack ingests Fleet's, thurbox's and the agents' telemetry and every dashboard query returns data")
 
 
 if __name__ == "__main__":

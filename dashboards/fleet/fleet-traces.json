@@ -239,7 +239,7 @@
     {
       "type": "table",
       "title": "Effects",
-      "description": "spawn, brief, deliver, release and markReady effects, with their outcome.",
+      "description": "Each effect of a Task or CronTask, with its outcome.",
       "datasource": {
         "type": "tempo",
         "uid": "${tempo}"

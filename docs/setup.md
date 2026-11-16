@@ -5,8 +5,9 @@ existing stack.
 
 ```mermaid
 flowchart LR
-  F["fleet up"] -- "OTLP http/protobuf" --> C["OpenTelemetry Collector<br/>+ deltatocumulative"]
-  X["thurbox automation tick"] -- "OTLP http/protobuf" --> C
+  F["fleet up<br/>+ runtime-mux, workspace-git"] -- "OTLP http/protobuf" --> C["OpenTelemetry Collector<br/>+ deltatocumulative"]
+  X["thurbox"] -- "OTLP http/protobuf" --> C
+  A["agents Fleet launches"] -- OTLP --> C
   C -- metrics --> P["Prometheus<br/>+ rules/"]
   C -- traces --> T["Tempo"]
   C -- logs --> L["Loki"]
@@ -20,18 +21,18 @@ flowchart LR
 [`collector/otelcol.yaml`](../collector/otelcol.yaml) receives OTLP over
 HTTP on port 4318 and sends metrics to Prometheus, traces to Tempo and logs
 to Loki. It needs the contrib distribution (`otelcol-contrib`) for the
-`deltatocumulative` processor: Thurbox exports its metrics as deltas, and
-Prometheus stores cumulative series. Fleet's metrics are cumulative and pass
-through unchanged.
+`deltatocumulative` processor: Claude Code and Codex export their usage
+metrics as deltas, and Prometheus stores cumulative series. Fleet's metrics
+are cumulative and pass through unchanged.
 
-Fleet and Thurbox speak OTLP over HTTP with protobuf only, and have no TLS
+Fleet and thurbox speak OTLP over HTTP with protobuf only, and have no TLS
 client. Run the collector where they reach it over `http://`, and let it
 forward to remote backends.
 
 ## Prometheus
 
 The dashboards and rules expect Prometheus's OTLP naming, such as
-`fleet_effects_total` and `thurbox_turn_duration_seconds_bucket`. Two setups
+`fleet_effects_total` and `fleet_reconcile_duration_seconds_bucket`. Two setups
 produce it:
 
 - **Prometheus 3 OTLP receiver.** Start Prometheus with
@@ -40,8 +41,8 @@ produce it:
 - **Collector `prometheus` exporter, scraped by Prometheus.** Without
   `honor_labels: true` on the scrape job, `job` is the scrape job's name. The
   Fleet dashboards still work, but one `job` then covers every manager behind
-  that collector. The Thurbox dashboards and rules expect `job="thurbox"`, so
-  set `honor_labels: true`.
+  that collector. Turn on `resource_to_telemetry_conversion` so `fleet.task`
+  reaches each agent's series.
 
 Promote these resource attributes to labels, as
 [`quickstart/prometheus.yml`](../quickstart/prometheus.yml) does:
@@ -50,27 +51,23 @@ Promote these resource attributes to labels, as
 otlp:
   promote_resource_attributes:
     - service.version
-    - host.name          # the Thurbox dashboards' Host variable
-    - thurbox.instance   # tells a Thurbox sandbox from the real instance
-    - thurbox.agent      # these three group the agents' own usage
-    - thurbox.session.id
-    - thurbox.session.name
+    - fleet.task   # what Fleet adds to every agent it launches:
+    - fleet.uid    # groups the agents' own usage by Task
 ```
 
-Without `host.name`, two Thurbox machines write the same series. Allow
-out-of-order samples (`storage.tsdb.out_of_order_time_window`), because OTLP
-pushes can arrive out of order.
+Allow out-of-order samples (`storage.tsdb.out_of_order_time_window`),
+because OTLP pushes can arrive out of order.
 
-Add `rules/fleet.rules.yml` and `rules/thurbox.rules.yml` to `rule_files`,
-or load them into your ruler. Each alert has a `severity` label: `critical`,
-`warning` or `info`. Route on it in Alertmanager.
+Add `rules/fleet.rules.yml` to `rule_files`, or load it into your ruler.
+Each alert has a `severity` label: `critical`, `warning` or `info`. Route
+on it in Alertmanager.
 
 ## Tempo and Loki
 
 - **Tempo** stores Fleet's spans. **Fleet traces** needs TraceQL metrics for
   its two latency panels. Tempo 3 serves them with the quick-start's plain
   configuration.
-- **Loki** stores Thurbox's session event logs and diagnostic logs. It must
+- **Loki** stores the thurbox interface's warnings. It must
   accept OTLP (`/otlp/v1/logs`, on by default in Loki 3), which turns
   `service.name` into the `service_name` stream label and each log attribute
   into structured metadata.

@@ -259,7 +259,7 @@
       "title": "Per-Task depth",
       "options": {
         "mode": "markdown",
-        "content": "Fleet v2.4 exports the inbox depth as one total without a Task attribute. Find the Task in the **Fleet traces** dashboard (`effect deliver` spans)."
+        "content": "Fleet exports the inbox depth as one total without a Task attribute. Find the Task in the **Fleet traces** dashboard (`effect deliver` spans)."
       },
       "gridPos": {
         "x": 18,

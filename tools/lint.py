@@ -54,10 +54,6 @@ class Catalog:
             for m in data["metrics"]:
                 for attr, values in m["attributes"].items():
                     self.labels.setdefault(underscored(attr), set()).update(values)
-            if "per_session_attribute" in data:
-                self.labels.setdefault(underscored(data["per_session_attribute"]), set())
-            # Resource attributes Prometheus promotes to labels, Thurbox's own
-            # and those it adds to every agent it launches.
             for attr in data.get("resource", []) + data.get("agent_resource", []):
                 self.labels.setdefault(underscored(attr), set())
             spans = data.get("spans", {"attributes": [], "names": []})
@@ -88,23 +84,23 @@ def check_promql(where: str, expr: str, cat: Catalog, recorded: set[str]) -> Non
 def check_logql(where: str, expr: str, cat: Catalog) -> None:
     for name in re.findall(r"thurbox\.session\.\w+", expr):
         if name not in cat.log_events:
-            problem(where, f"{name} is not a log event Thurbox exports")
+            problem(where, f"{name} is not a log event a catalog lists")
     for label in re.findall(r"\|\s*(\w+)\s*(?:=~|!~|!=|=|>=|<=|>|<)", expr):
         if label not in cat.log_attrs and label != "detected_level":
-            problem(where, f"{label} is not a log attribute Thurbox exports")
+            problem(where, f"{label} is not a log attribute a catalog lists")
     for label in re.findall(r"\{\{\s*\.(\w+)", expr):
         if label not in cat.log_attrs:
-            problem(where, f"{label} is not a log attribute Thurbox exports")
+            problem(where, f"{label} is not a log attribute a catalog lists")
 
 
 def check_traceql(where: str, query: str, cat: Catalog) -> None:
     for attr in re.findall(r"\bspan\.([\w.]+)", query):
         if attr not in cat.span_attrs:
-            problem(where, f"span attribute {attr} is not one Fleet exports")
+            problem(where, f"span attribute {attr} is not one a catalog lists")
     for op, value in re.findall(r"(?<![\w.])name\s*(=~|!~|!=|=)\s*\"([^\"]+)\"", query):
         pattern = value if "~" in op else re.escape(value)
         if not any(re.fullmatch(pattern, ex) for ex in cat.span_examples):
-            problem(where, f'span name "{value}" matches no span Fleet exports')
+            problem(where, f'span name "{value}" matches no span a catalog lists')
 
 
 def panels(items: list[dict]):

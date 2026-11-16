@@ -1,12 +1,13 @@
-# OpenTelemetry Collector for Fleet v2 and Thurbox.
+# OpenTelemetry Collector for thurbox v3: Fleet, the thurbox interface and
+# the agents Fleet launches.
 #
-# Fleet and Thurbox speak OTLP over HTTP with protobuf only, and have no TLS
+# Fleet and thurbox speak OTLP over HTTP with protobuf only, and have no TLS
 # client, so the collector listens on plain HTTP. Bind it to an address only
 # trusted hosts reach, or put authentication in front of it.
 #
-#   Fleet:   OTEL_EXPORTER_OTLP_ENDPOINT=http://<collector>:4318 fleet up
-#   Thurbox: [telemetry] enabled = true, endpoint = "http://<collector>:4318"
-#            in settings.toml
+#   export OTEL_EXPORTER_OTLP_ENDPOINT=http://<collector>:4318
+#   export OTEL_LOGS_EXPORTER=otlp   # optional: the interface's warnings
+#   fleet up                         # or: thurbox
 #
 # Each exporter reads its endpoint from the environment, with the defaults
 # of the quick-start stack in quickstart/compose.yaml. Needs the contrib
@@ -18,9 +19,9 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
-  # Thurbox exports its metrics with delta temporality: each tick is a fresh
-  # process. Prometheus stores cumulative series. Fleet's cumulative metrics
-  # pass through unchanged.
+  # Claude Code and Codex export their usage metrics with delta temporality,
+  # and Prometheus stores cumulative series. Fleet's cumulative metrics pass
+  # through unchanged.
   deltatocumulative: {}
 
 exporters:
@@ -29,7 +30,8 @@ exporters:
     metrics_endpoint: ${env:PROMETHEUS_OTLP_ENDPOINT:-http://prometheus:9090/api/v1/otlp/v1/metrics}
   otlphttp/tempo:
     traces_endpoint: ${env:TEMPO_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
-  # Thurbox's session events and diagnostic logs. Fleet v2.4 exports no logs.
+  # The thurbox interface's warnings, and the agents' own events. Fleet
+  # exports no logs.
   otlphttp/loki:
     logs_endpoint: ${env:LOKI_OTLP_ENDPOINT:-http://loki:3100/otlp/v1/logs}
 

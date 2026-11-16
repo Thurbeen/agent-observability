@@ -1,4 +1,4 @@
-# A local stack to try the dashboards: Fleet and Thurbox -> collector ->
+# A local stack to try the dashboards: Fleet, thurbox and their agents -> collector ->
 # Prometheus, Tempo and Loki -> Grafana. Every port binds to 127.0.0.1 only, and Grafana
 # lets anyone on this machine in as an admin. Do not expose it. Set
 # COLLECTOR_PORT, PROMETHEUS_PORT, TEMPO_PORT, LOKI_PORT or GRAFANA_PORT to
