@@ -146,7 +146,8 @@ class Fleet:
         pass_total, children = 0.0, []
         for controller, (n, mean) in self.LOAD.items():
             for k in range(n * 2):
-                o = self.outcome(controller)
+                ends_with_effect = i == self.steps and controller == "TaskController" and k == 0
+                o = "changed" if ends_with_effect else self.outcome(controller)
                 d = rng.lognormvariate(math.log(mean), 0.5)
                 self.reconciles[(controller, o)].append(d)
                 if k < n:
@@ -231,7 +232,7 @@ class Fleet:
         return o
 
     def effect(self, i: int) -> tuple[str | None, str]:
-        r = self.rng.random()
+        r = 0.0 if i == self.steps else self.rng.random()
         if r < 0.25:
             effect, o = "deliver", "delivered" if self.rng.random() < 0.93 else "already"
         elif r < 0.33:
