@@ -39,11 +39,11 @@ jobs:
       - name: promtool check rules
         run: >-
           $COMPOSE run --rm --no-deps -v "$PWD:/w:ro" -w /w --entrypoint promtool prometheus
-          check rules rules/fleet.rules.yml rules/thurbox.rules.yml .cache/dashboard-queries.yml
+          check rules rules/fleet.rules.yml .cache/dashboard-queries.yml
       - name: promtool test rules
         run: >-
           $COMPOSE run --rm --no-deps -v "$PWD:/w:ro" -w /w --entrypoint promtool prometheus
-          test rules rules/tests/fleet.rules.test.yml rules/tests/thurbox.rules.test.yml
+          test rules rules/tests/fleet.rules.test.yml
       - name: Collector config is valid
         run: $COMPOSE run --rm --no-deps collector validate --config=/etc/otelcol/config.yaml
 

@@ -107,3 +107,34 @@ tests:
               summary: "Fleet inbox entries on fleet waited for an hour"
               description: "The inbox depth stayed at 2 or more for an hour."
               runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetinboxbacklog
+
+  - name: a lost session and a stalled Task
+    interval: 1m
+    input_series:
+      - series: 'fleet_sessions{job="fleet",fleet_session_state="Lost"}'
+        values: "0 0 1x20"
+      - series: 'fleet_sessions{job="fleet",fleet_session_state="Running"}'
+        values: "3x22"
+      - series: 'fleet_tasks{job="fleet",fleet_phase="Stalled"}'
+        values: "0x5 2x16"
+      - series: 'fleet_tasks{job="fleet",fleet_phase="Briefed"}'
+        values: "4x22"
+    alert_rule_test:
+      - {eval_time: 5m, alertname: FleetSessionsLost, exp_alerts: []}
+      - eval_time: 8m
+        alertname: FleetSessionsLost
+        exp_alerts:
+          - exp_labels: {severity: warning, job: fleet}
+            exp_annotations:
+              summary: "1 Fleet session(s) on fleet lost for 5 minutes"
+              description: "The runtime holds the session, but its agent's window is gone, and revives have not brought it back."
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetsessionslost
+      - {eval_time: 9m, alertname: FleetTasksStalled, exp_alerts: []}
+      - eval_time: 11m
+        alertname: FleetTasksStalled
+        exp_alerts:
+          - exp_labels: {severity: warning, job: fleet}
+            exp_annotations:
+              summary: "2 Fleet Task(s) on fleet stalled"
+              description: "Spawn or brief attempts are exhausted. A stalled Task waits for a person."
+              runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleettasksstalled

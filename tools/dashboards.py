@@ -17,16 +17,12 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent.parent / "dashboards"
 
-# Fleet exports metrics every 60 s by default (OTEL_METRIC_EXPORT_INTERVAL),
-# and Thurbox once a minute from `automation tick`. A rate needs two points,
-# so no Prometheus panel looks at less than 2m.
 MIN_INTERVAL = "2m"
 JOB = 'job=~"$job"'
 PROM = {"type": "prometheus", "uid": "${prometheus}"}
 TEMPO = {"type": "tempo", "uid": "${tempo}"}
 LOKI = {"type": "loki", "uid": "${loki}"}
 
-# The status colours. Every other series takes Grafana's palette.
 BAD, WARN, GOOD = "red", "orange", "green"
 OUTCOME_COLORS = {
     "error": BAD, "failed": BAD, "unknown": WARN, "leaseLost": WARN, "conflict": WARN,
@@ -36,7 +32,6 @@ OUTCOME_COLORS = {
 
 
 def sel(*matchers: str) -> str:
-    # Thurbox's resource names service.name only, so its job is always thurbox.
     first = () if any(m.startswith("job=") for m in matchers) else (JOB,)
     return "{" + ",".join(first + matchers) + "}"
 
@@ -230,8 +225,24 @@ def overview() -> dict:
     b.add(stat("Forge throttles", over_range("fleet_forge_calls_total", 'fleet_outcome="throttled"'),
                "Change polls a forge throttled, over the range.", bad_above=1), 4, 4)
 
-    # Fleet exports no Task phases; the Task effects are the flow they leave.
-    b.row("Task flow")
+    b.row("Tasks and sessions")
+    for title, expr, desc, bad in (
+        ("Stalled Tasks", f'sum(fleet_tasks{sel('fleet_phase="Stalled"')})',
+         "Tasks whose session stopped making progress, at the start of the latest pass.", True),
+        ("Releasing Tasks", f'sum(fleet_tasks{sel('fleet_phase="Releasing"')})',
+         "Tasks Fleet is releasing, at the start of the latest pass.", False),
+        ("Lost sessions", f'sum(fleet_sessions{sel('fleet_session_state="Lost"')})',
+         "Task sessions the runtime proved lost, at the start of the latest pass.", True),
+        ("Paused sessions", f'sum(fleet_sessions{sel('fleet_session_state="Paused"')})',
+         "Task sessions paused, at the start of the latest pass.", False),
+    ):
+        b.add(stat(title, expr, desc, bad_above=1 if bad else None), 6, 4)
+    b.add(series("Tasks by phase", [target(f"sum by (fleet_phase) (fleet_tasks{sel()}) > 0", "{{fleet_phase}}")],
+                 "Tasks in each phase at the start of each pass. Concluded Tasks stay until they are released.",
+                 stack=True), 12, 8)
+    b.add(series("Sessions by state",
+                 [target(f"sum by (fleet_session_state) (fleet_sessions{sel()}) > 0", "{{fleet_session_state}}")],
+                 "Task sessions in each state at the start of each pass.", stack=True), 12, 8)
     for title, effect, outcomes, desc in (
         ("Tasks spawned", "spawn", "spawned|adopted", "Task sessions started or adopted, over the range."),
         ("Tasks briefed", "brief", "delivered|already", "Task briefs sent, over the range."),
@@ -248,7 +259,7 @@ def overview() -> dict:
                  "when they persist.", unit="ops", stack=True), 12, 8)
     b.add(series("Mean reconcile duration by controller",
                  [target(mean_duration(by="fleet_controller"), "{{fleet_controller}}")],
-                 "Mean of one object's reconcile. Fleet v2.4 records this histogram on the SDK's default "
+                 "Mean of one object's reconcile. Fleet records this histogram on the SDK's default "
                  "bucket bounds, which are millisecond-scale, so quantiles from its buckets are wrong. "
                  "Use the Fleet traces dashboard for p50/p95.", unit="s"), 12, 8)
     b.add(series("Reconcile problems",
@@ -260,16 +271,24 @@ def overview() -> dict:
     b.add(series("Effects by kind and outcome",
                  [target(rate("fleet_effects_total", by="fleet_effect, fleet_outcome"),
                          "{{fleet_effect}} {{fleet_outcome}}")],
-                 "External effects per second: spawn, brief, deliver, release and markReady.",
+                 "External effects per second, by kind and outcome.",
                  unit="ops", bars=True, stack=True), 16, 8)
     b.add(table("Effects over the range",
                 over_range("fleet_effects_total", by="fleet_effect, fleet_outcome"),
                 "Effects by kind and outcome over the dashboard range.", ["fleet_effect", "fleet_outcome"]), 8, 8)
-    b.row("Not exported yet")
-    b.add(text("Task phases", "Fleet v2.4 exports no gauge of Tasks by phase, so this dashboard cannot "
-               "show Releasing or NeedsAttention Tasks. Use `fleet list task` meanwhile."), 24, 3)
+    runtime = "fleet_runtime_call_duration_seconds"
+    b.row("Runtime calls")
+    b.add(series("Runtime calls by verb and outcome",
+                 [target(rate(f"{runtime}_count", by="fleet_runtime_verb, fleet_outcome"),
+                         "{{fleet_runtime_verb}} {{fleet_outcome}}")],
+                 "Runtime protocol calls per second. unknown is a call that failed: the program did not start, "
+                 "timed out, exited non-zero or answered Unknown.", unit="ops", stack=True), 12, 8)
+    b.add(series("Mean runtime call duration by verb",
+                 [target(f"{rate(runtime + '_sum', by='fleet_runtime_verb')} / "
+                         f"{rate(runtime + '_count', by='fleet_runtime_verb')}", "{{fleet_runtime_verb}}")],
+                 "Mean of one runtime protocol call, per verb.", unit="s"), 12, 8)
     return dashboard("fleet-overview", "Fleet overview",
-                     "Fleet v2 manager health: reconcile passes, effects and errors.", b,
+                     "Fleet manager health: Tasks, sessions, reconciles, effects and runtime calls.", b,
                      [datasource_var("prometheus", "prometheus", "Prometheus"), JOB_VAR])
 
 
@@ -335,7 +354,7 @@ def gateway() -> dict:
                "Inbox entries delivered over the range."), 6, 4)
     b.add(stat("Delivery failed or unknown", over_range("fleet_effects_total", deliver, 'fleet_outcome=~"failed|unknown"'),
                "Deliveries that failed, or whose outcome Fleet could not observe.", bad_above=1), 6, 4)
-    b.add(text("Per-Task depth", "Fleet v2.4 exports the inbox depth as one total without a Task attribute. "
+    b.add(text("Per-Task depth", "Fleet exports the inbox depth as one total without a Task attribute. "
                "Find the Task in the **Fleet traces** dashboard (`effect deliver` spans)."), 6, 4)
     b.add(series("Inbox depth", [target(f"max(fleet_inbox_depth{sel()})", "waiting")],
                  "Undelivered inbox entries over time. A depth that never returns to zero means a Task's "
@@ -391,7 +410,7 @@ def traces() -> dict:
     b.add(search("Object reconciles", f"{{ {reconciles} && {obj} }}",
                  "One reconcile of a Fleet object. Set Object to a Task or ChangeRequest name."), 12, 9)
     b.add(search("Effects", f'{{ {svc} && name =~ "effect .+" && {obj} }}',
-                 "spawn, brief, deliver, release and markReady effects, with their outcome."), 12, 9)
+                 "Each effect of a Task or CronTask, with its outcome."), 12, 9)
     b.add(search("Errors", f"{{ {svc} && status = error }}",
                  "Commands with a non-zero exit and reconciles that failed."), 12, 9)
     b.add(search("Forge polls without an answer",
@@ -406,166 +425,51 @@ def traces() -> dict:
                       textbox_var("object", "Object", ".+", "A regular expression on the Fleet object name (fleet.name).")])
 
 
-THURBOX = 'job="thurbox"'
-HOST = 'host_name=~"$host"'
-AGENT = 'agent=~"$agent"'
-# Thurbox's state words, coloured the way its session list reads.
-STATE_COLORS = {
-    "working": "blue", "blocked": "orange", "background": "purple", "done": "green", "idle": "text",
-    "failed": "red", "lost": "dark-red", "unreachable": "semi-dark-orange", "stopped": "gray",
-    "running": "light-blue", "uncovered": "gray", "unreported": "gray",
-}
-THURBOX_VARS = [
-    datasource_var("prometheus", "prometheus", "Prometheus"),
-    query_var("host", "Host", 'label_values(thurbox_sessions{job="thurbox"}, host_name)',
-              "The host.name of a Thurbox instance. Empty unless Prometheus promotes host.name."),
-    query_var("agent", "Agent", 'label_values(thurbox_sessions{job="thurbox", host_name=~"$host"}, agent)',
-              "The coding agent a session runs."),
-]
-
-
-def tb(*matchers: str) -> tuple[str, ...]:
-    return (THURBOX, HOST, AGENT) + matchers
-
-
-def counted(metric: str, window: str = "$__range", by: str = "") -> str:
-    """What a Thurbox counter or histogram series counted over a window.
-
-    Thurbox exports deltas, and the collector's deltatocumulative processor
-    sends a cumulative point only when a delta arrives, so a series has a
-    sample only in the minutes something happened. `increase()` needs two
-    samples in the window and goes stale between them; the last value in the
-    window minus the last value before it does not. A series born in the
-    window counts from zero. The look-back before the window is one day.
-    """
-    s = f"{metric}{sel(*tb())}"
-    last = f"last_over_time({s}[{window}])"
-    group = f" by ({by})" if by else ""
-    return f"sum{group} (clamp_min({last} - last_over_time({s}[1d] offset {window}), 0) or {last})"
-
-
-def quantile(q: float, metric: str, window: str) -> str:
-    return f"histogram_quantile({q}, {counted(metric + '_bucket', window, by='le')})"
-
-
-def by_state(panel: dict) -> dict:
-    panel["fieldConfig"]["overrides"] = [
-        {"matcher": {"id": "byName", "options": state},
-         "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": color}}]}
-        for state, color in STATE_COLORS.items()
-    ]
-    return panel
-
-
-def thurbox_sessions() -> dict:
-    g = "thurbox_sessions"
-    now = lambda states: f'sum({g}{sel(*tb(f"state=~\"{states}\""))})'
-    b = Board()
-    b.row("Now")
-    b.add(stat("Sessions", f"sum({g}{sel(*tb())})", "Live sessions, in every state."), 4, 4)
-    b.add(stat("Working", now("working"), "Sessions whose agent is in a turn."), 4, 4)
-    waiting = stat("Waiting on you", now("blocked"), "Sessions blocked on a human: a permission prompt or a "
-                   "question.")
-    waiting["fieldConfig"]["defaults"]["thresholds"]["steps"] = [{"color": GOOD, "value": None},
-                                                                 {"color": WARN, "value": 1}]
-    b.add(waiting, 4, 4)
-    b.add(stat("Done", now("done"), "Sessions whose agent finished a turn you have not looked at."), 4, 4)
-    b.add(stat("Idle", now("idle|background"), "Sessions at rest, or running background work."), 4, 4)
-    b.add(stat("Failed, lost or unreachable", now("failed|lost|unreachable"),
-               "A launch that failed, a pane that went with nobody asking, or a remote host that cannot be "
-               "reached.", bad_above=1), 4, 4)
-
-    b.row("Sessions")
-    b.add(by_state(series("Sessions by state", [target(f"sum by (state) ({g}{sel(*tb())}) > 0", "{{state}}")],
-                          "Live sessions by the state word thurbox-cli session list shows.", stack=True)), 12, 8)
-    b.add(series("Sessions by agent", [target(f"sum by (agent) ({g}{sel(*tb())})", "{{agent}}")],
-                 "Live sessions per coding agent.", stack=True), 12, 8)
-
-    turns, waits = "thurbox_turn_duration_seconds", "thurbox_blocked_duration_seconds"
-    b.row("Turns")
-    b.add(stat("Turns", counted(f"{turns}_count"),
-               "Turns that ended over the range. A turn runs from entering working to leaving it."), 6, 4)
-    b.add(stat("Median turn", quantile(0.5, turns, "$__range"), "Median turn over the range.", unit="s"), 6, 4)
-    b.add(stat("p95 turn", quantile(0.95, turns, "$__range"), "95th percentile turn over the range.", unit="s"), 6, 4)
-    b.add(stat("Median wait on you", quantile(0.5, waits, "$__range"),
-               "Median time a session stayed blocked on a human, over the range.", unit="s"), 6, 4)
-    b.add(series("Turn duration, trailing hour",
-                 [target(quantile(0.5, turns, "1h"), "p50"), target(quantile(0.95, turns, "1h"), "p95", ref="B")],
-                 "Turn quantiles over the hour before each point, from the histogram's buckets (1 s to 8 h).",
-                 unit="s"), 12, 8)
-    b.add(series("Wait on you, trailing hour",
-                 [target(quantile(0.5, waits, "1h"), "p50"), target(quantile(0.95, waits, "1h"), "p95", ref="B")],
-                 "How long sessions stayed blocked on a human, over the hour before each point.", unit="s"), 12, 8)
-    b.add(table("Turns by outcome", counted(f"{turns}_count", by="outcome"),
-                "Turns over the range by the state they ended in: done, blocked, idle or background.",
-                ["outcome"]), 8, 8)
-    mean = f"{counted(turns + '_sum', by='agent')} / {counted(turns + '_count', by='agent')}"
-    gauge = {"type": "bargauge", "title": "Mean turn by agent", "datasource": PROM, "interval": MIN_INTERVAL,
-             "description": "Mean turn per agent over the range.",
-             "targets": [{**target(mean, "{{agent}}"), "instant": True, "range": False}],
-             "fieldConfig": {"defaults": {"unit": "s", "min": 0, "color": {"mode": "palette-classic"}}, "overrides": []},
-             "options": {"orientation": "horizontal", "displayMode": "gradient", "showUnfilled": True,
-                         "reduceOptions": {"calcs": ["lastNotNull"]}}}
-    b.add(gauge, 8, 8)
-    b.add(table("State changes", counted("thurbox_session_transitions_total", by="from, to"),
-                "State changes over the range. An empty from is a session's first state.", ["from", "to"]), 8, 8)
-
-    b.row("Lifecycle")
-    b.add(table("Lifecycle events", counted("thurbox_session_lifecycle_total", by="reason"),
-                "Sessions spawned, stopped, lost, relaunched, deleted and more, over the range.", ["reason"]), 8, 8)
-    b.add(table("Agent exits", counted("thurbox_session_exits_total", by="agent, exit_code"),
-                "Agent processes that returned, by exit code, over the range.", ["agent", "exit_code"]), 8, 8)
-    life = "thurbox_session_lifetime_seconds"
-    b.add(stat("Median session lifetime", quantile(0.5, life, "$__range"),
-               "Median time from creation to going, for sessions that went over the range.", unit="s"), 8, 8)
-    return dashboard("thurbox-sessions", "Thurbox sessions",
-                     "Thurbox's own session metrics: sessions by state, turns, waits on a human and lifecycle.",
-                     b, THURBOX_VARS)
-
-
-def thurbox_events() -> dict:
+def thurbox_interface() -> dict:
     stream = '{service_name="thurbox"}'
-    session = '| thurbox_session_name =~ "$session" | agent =~ "$agent"'
-    events = f'{stream} |= "thurbox.session." {session}'
-
-    def logs(title: str, expr: str, desc: str) -> dict:
-        return {"type": "logs", "title": title, "description": desc, "datasource": LOKI,
-                "targets": [{"refId": "A", "datasource": LOKI, "expr": expr, "queryType": "range"}],
-                "options": {"showTime": True, "wrapLogMessage": False, "sortOrder": "Descending",
-                            "enableLogDetails": True, "dedupStrategy": "none"}}
-
+    svc = 'resource.service.name = "thurbox"'
+    commands = f'{{ {svc} && name =~ "fleet .+" }}'
     b = Board()
-    b.row("Session events")
-    count = {"type": "timeseries", "title": "Session events", "datasource": LOKI, "interval": "10m",
-             "description": "Session events per 10 minutes, from Thurbox's event log records.",
-             "targets": [{"refId": "A", "datasource": LOKI, "legendFormat": "{{event}}",
-                          "expr": f'sum by (event) (count_over_time({events} | label_format event="{{{{__line__}}}}" '
-                                  "[$__interval]))"}],
-             "fieldConfig": {"defaults": {"unit": "short", "min": 0, "custom": {
-                 "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1, "stacking": {"mode": "normal", "group": "A"}}},
-                 "overrides": []},
-             "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["sum"]},
-                         "tooltip": {"mode": "multi", "sort": "desc"}}}
-    b.add(count, 24, 7)
-    timeline = (f'{events} | line_format "{{{{.thurbox_session_name}}}}  {{{{.agent}}}}  '
-                '{{trimPrefix \\"thurbox.session.\\" __line__}} {{.from}}{{if .to}} -> {{.to}}{{end}} {{.reason}}"')
-    b.add(logs("Session timeline", timeline,
-               "One line per session event: created, state_changed (from -> to), changed and gone (reason). "
-               "Each record carries thurbox.session.id, which the agents' own telemetry carries too."), 24, 12)
-    b.row("Diagnostics")
-    b.add(logs("Interface warnings", f'{stream} != "thurbox.session." | detected_level=~"warn|error"',
-               "The interface's own WARN and ERROR log lines, sent when export_diagnostic_logs is on."), 24, 7)
-    return dashboard("thurbox-events", "Thurbox session events",
-                     "Thurbox's session event log records and diagnostic logs in Loki.", b,
-                     [datasource_var("loki", "loki", "Loki"),
-                      textbox_var("session", "Session", ".+", "A regular expression on the session name."),
-                      textbox_var("agent", "Agent", ".+", "A regular expression on the agent.")])
+    b.row("Fleet commands")
+    for title, q, desc, unit in (
+        ("Fleet commands per second by command", f"{commands} | rate() by (span.fleet.command)",
+         "The fleet commands the interface ran and waited for, from its client spans.", "ops"),
+        ("Fleet command p50 / p95", f"{commands} | quantile_over_time(duration, .5, .95)",
+         "Quantiles of a fleet command as the interface waited for it.", "s"),
+    ):
+        b.add({"type": "timeseries", "title": title, "description": desc, "datasource": TEMPO,
+               "targets": [{"refId": "A", "datasource": TEMPO, "queryType": "traceql", "query": q,
+                            "metricsQueryType": "range", "step": "1m"}],
+               "fieldConfig": {"defaults": {"unit": unit, "custom": {"lineWidth": 1, "showPoints": "never",
+                                                                      "spanNulls": True}}, "overrides": []},
+               "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max"]},
+                           "tooltip": {"mode": "multi", "sort": "desc"}}}, 12, 8)
+    b.add({"type": "table", "title": "Slowest fleet commands", "datasource": TEMPO,
+           "description": "Fleet commands the interface ran. Each one's trace continues into fleet, runtime-mux "
+                          "and workspace-git.",
+           "targets": [{"refId": "A", "datasource": TEMPO, "queryType": "traceql", "query": commands,
+                        "limit": 20, "spss": 3, "tableType": "spans"}],
+           "fieldConfig": {"defaults": {}, "overrides": []}, "options": {}}, 24, 9)
+    b.row("Log lines")
+    b.add({"type": "timeseries", "title": "Log lines by level", "datasource": LOKI, "interval": "10m",
+           "description": "The interface's own WARN and ERROR lines per 10 minutes.",
+           "targets": [{"refId": "A", "datasource": LOKI, "legendFormat": "{{detected_level}}",
+                        "expr": f"sum by (detected_level) (count_over_time({stream} [$__interval]))"}],
+           "fieldConfig": {"defaults": {"unit": "short", "min": 0, "custom": {
+               "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1, "stacking": {"mode": "normal", "group": "A"}}},
+               "overrides": []},
+           "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["sum"]},
+                       "tooltip": {"mode": "multi", "sort": "desc"}}}, 24, 6)
+    b.add({"type": "logs", "title": "Interface warnings", "datasource": LOKI,
+           "description": "The interface's WARN and ERROR log lines, exported when OTEL_LOGS_EXPORTER=otlp is set.",
+           "targets": [{"refId": "A", "datasource": LOKI, "expr": stream, "queryType": "range"}],
+           "options": {"showTime": True, "wrapLogMessage": False, "sortOrder": "Descending",
+                       "enableLogDetails": True, "dedupStrategy": "none"}}, 24, 12)
+    return dashboard("thurbox-interface", "Thurbox interface",
+                     "The thurbox interface's Fleet commands from its spans, and its warnings from its logs.", b,
+                     [datasource_var("tempo", "tempo", "Tempo"), datasource_var("loki", "loki", "Loki")])
 
 
-# Each agent's own token types mapped onto four classes, so every agent
-# Thurbox launches shares one scale. Claude Code's types are disjoint. Codex
-# counts cached input inside input (total = input + output) and reasoning
-# inside output. A new agent needs one entry here.
 TOKEN_CLASSES = {
     "claude": ("claude_code_token_usage_tokens_total", "type", {
         "input": ["input"], "cache_read": ["cacheRead"], "cache_write": ["cacheCreation"], "output": ["output"]}),
@@ -573,43 +477,48 @@ TOKEN_CLASSES = {
         "input": ["input", "-cached_input"], "cache_read": ["cached_input"], "cache_write": ["cache_write_input"],
         "output": ["output"]}),
 }
-SESSION = "thurbox_agent, thurbox_session_id, thurbox_session_name"
+COST = {"claude": "claude_code_cost_usage_USD_total"}
+TASK = "fleet_task"
 
 
 def grew(selector: str, window: str) -> str:
     """Per series, what an agent's counter counted over a window. The agents
-    export deltas, which reach Prometheus as sparse cumulative samples: the
-    same last-value difference as counted()."""
+    export deltas, which the collector's deltatocumulative processor turns
+    into cumulative samples only in the minutes something happened, so
+    `increase()` goes stale between them. The last value in the window minus
+    the last value before it does not; a series born in the window counts
+    from zero, and the look-back before the window is one day."""
     last = f"last_over_time({selector}[{window}])"
     return f"(clamp_min({last} - last_over_time({selector}[1d] offset {window}), 0) or {last})"
 
 
+def as_agent(agent: str, expr: str) -> str:
+    return f'label_replace({expr}, "agent", "{agent}", "", "")'
+
+
 def tokens(window: str, by: str) -> str:
     parts = []
-    for metric, label, classes in TOKEN_CLASSES.values():
+    for agent, (metric, label, classes) in TOKEN_CLASSES.items():
         for cls, types in classes.items():
             terms = [(t.startswith("-"), t.lstrip("-")) for t in types]
             expr = " ".join(
-                f"{'-' if neg else ('+' if i else '')} sum by ({SESSION}) "
-                f"({grew(f'{metric}{{thurbox_agent!=\"\",{label}=\"{t}\"}}', window)})"
+                f"{'-' if neg else ('+' if i else '')} sum by ({TASK}) "
+                f"({grew(f'{metric}{{{TASK}!=\"\",{label}=\"{t}\"}}', window)})"
                 for i, (neg, t) in enumerate(terms))
-            parts.append(f'label_replace({expr}, "token_class", "{cls}", "", "")')
+            parts.append(as_agent(agent, f'label_replace({expr}, "token_class", "{cls}", "", "")'))
     return f"sum by ({by}) ({' or '.join(parts)})"
 
 
 def cost(window: str, by: str) -> str:
-    # Only Claude Code exports a cost. Nothing here prices another agent.
-    return f'sum by ({by}) ({grew("claude_code_cost_usage_USD_total{thurbox_agent!=\"\"}", window)})'
-
-
-def as_agent(expr: str) -> str:
-    return f'sum by (agent) (label_replace({expr}, "agent", "$1", "thurbox_agent", "(.+)"))'
+    parts = [as_agent(agent, f"sum by ({TASK}) ({grew(f'{metric}{{{TASK}!=\"\"}}', window)})")
+             for agent, metric in COST.items()]
+    return f"sum by ({by}) ({' or '.join(parts)})"
 
 
 def agent_usage() -> dict:
     def bar_gauge(title: str, expr: str, desc: str, unit: str) -> dict:
         return {"type": "bargauge", "title": title, "description": desc, "datasource": PROM, "interval": MIN_INTERVAL,
-                "targets": [{**target(expr, "{{thurbox_agent}}"), "instant": True, "range": False}],
+                "targets": [{**target(expr, "{{agent}}"), "instant": True, "range": False}],
                 "fieldConfig": {"defaults": {"unit": unit, "min": 0, "noValue": "none exported",
                                              "color": {"mode": "palette-classic"}}, "overrides": []},
                 "options": {"orientation": "horizontal", "displayMode": "gradient", "showUnfilled": True,
@@ -634,49 +543,38 @@ def agent_usage() -> dict:
 
     b = Board()
     b.row("Over the range")
-    b.add(bar_gauge("Cost by agent", cost("$__range", "thurbox_agent"),
-                    "USD over the range, as each agent reports it. Only Claude Code exports a cost: the "
-                    "other agents show under Agent coverage, never as an estimate.", "currencyUSD"), 6, 8)
-    b.add(bar_gauge("Tokens by agent", tokens("$__range", "thurbox_agent"),
+    b.add(bar_gauge("Cost by agent", cost("$__range", "agent"),
+                    "USD over the range, as each agent reports it. Only Claude Code exports a cost; no panel "
+                    "estimates one.", "currencyUSD"), 12, 8)
+    b.add(bar_gauge("Tokens by agent", tokens("$__range", "agent"),
                     "Every agent on one scale: uncached input, cache reads, cache writes and output, "
-                    "normalised from each agent's own token types (TOKEN_CLASSES in tools/dashboards.py).", "short"), 6, 8)
-    peak = 'max by (agent) (max_over_time((sum by (agent) (thurbox_sessions{job="thurbox"}))[$__range:5m]))'
-    b.add(merged("Agent coverage",
-                 "Every agent Thurbox ran over the range, with what it exports. An agent with sessions and no "
-                 "tokens exports no usage telemetry, so it is missing from the other panels.",
-                 [{**target(peak, instant=True), "refId": "A"},
-                  {**target(as_agent(tokens("$__range", "thurbox_agent")), instant=True), "refId": "B"},
-                  {**target(as_agent(cost("$__range", "thurbox_agent")), instant=True), "refId": "C"}],
-                 {"Value #A": "peak sessions", "Value #B": "tokens", "Value #C": "USD"},
-                 {"tokens": "short", "USD": "currencyUSD"}, sort="peak sessions"), 12, 8)
+                    "normalised from each agent's own token types (TOKEN_CLASSES in tools/dashboards.py).", "short"),
+          12, 8)
 
     b.row("Over time")
     hourly = series("Tokens per hour by agent and class",
-                    [target(tokens("1h", "thurbox_agent, token_class"), "{{thurbox_agent}} {{token_class}}")],
+                    [target(tokens("1h", "agent, token_class"), "{{agent}} {{token_class}}")],
                     "Normalised tokens per hour, stacked: every agent that exports usage, in one graph.",
                     bars=True, stack=True)
     hourly["interval"] = "1h"
     hourly["options"]["legend"]["calcs"] = ["sum"]
     b.add(hourly, 14, 10)
-    b.add(merged("Top sessions",
-                 "Thurbox sessions by normalised tokens over the range, every agent together, with the cost "
-                 "where the agent reports one.",
-                 [{**target(f"topk(15, {tokens('$__range', 'thurbox_session_name, thurbox_agent')})",
-                            instant=True), "refId": "A"},
-                  {**target(cost("$__range", "thurbox_session_name, thurbox_agent"), instant=True),
-                   "refId": "B"}],
-                 {"thurbox_session_name": "session", "thurbox_agent": "agent", "Value #A": "tokens", "Value #B": "USD"},
+    b.add(merged("Top Tasks",
+                 "Fleet Tasks by normalised tokens over the range, every agent together, with the cost where "
+                 "the agent reports one.",
+                 [{**target(f"topk(15, {tokens('$__range', f'{TASK}, agent')})", instant=True), "refId": "A"},
+                  {**target(cost("$__range", f"{TASK}, agent"), instant=True), "refId": "B"}],
+                 {TASK: "task", "agent": "agent", "Value #A": "tokens", "Value #B": "USD"},
                  {"tokens": "short", "USD": "currencyUSD"}, sort="tokens", required="tokens"), 10, 10)
     return dashboard("thurbox-agent-usage", "Agent usage",
-                     "Tokens and cost of the agents Thurbox launches, normalised across agents.", b,
+                     "Tokens and cost of the agents Fleet launches, by Task, normalised across agents.", b,
                      [datasource_var("prometheus", "prometheus", "Prometheus")])
 
 
 DASHBOARDS = {
     "fleet/fleet-overview.json": overview, "fleet/fleet-forge.json": forge, "fleet/fleet-gateway.json": gateway,
     "fleet/fleet-traces.json": traces,
-    "thurbox/thurbox-sessions.json": thurbox_sessions, "thurbox/thurbox-events.json": thurbox_events,
-    "thurbox/thurbox-agent-usage.json": agent_usage,
+    "thurbox/thurbox-interface.json": thurbox_interface, "thurbox/thurbox-agent-usage.json": agent_usage,
 }
 
 

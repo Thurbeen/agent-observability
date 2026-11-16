@@ -1,41 +1,9 @@
 {
   "fleet": {
-    "repository": "https://github.com/Thurbeen/fleet",
-    "tag": "v2.4.0"
+    "repository": "https://github.com/Thurbeen/thurbox",
+    "tag": "facebe5d5b0eb73f838ec7f6dcf1ea4fc60af142"
   },
   "metrics": [
-    {
-      "name": "fleet.reconcile.duration",
-      "instrument": "histogram",
-      "unit": "s",
-      "attributes": {
-        "fleet.controller": [
-          "ChangeRequestController",
-          "ConversationController",
-          "ForgeController",
-          "ListenerController",
-          "TaskController"
-        ],
-        "fleet.outcome": [
-          "changed",
-          "conflict",
-          "error",
-          "leaseLost",
-          "unchanged"
-        ]
-      },
-      "prometheus": {
-        "series": [
-          "fleet_reconcile_duration_seconds_bucket",
-          "fleet_reconcile_duration_seconds_count",
-          "fleet_reconcile_duration_seconds_sum"
-        ],
-        "labels": [
-          "fleet_controller",
-          "fleet_outcome"
-        ]
-      }
-    },
     {
       "name": "fleet.effects",
       "instrument": "counter",
@@ -43,24 +11,49 @@
       "attributes": {
         "fleet.effect": [
           "brief",
+          "cleanWorkspace",
+          "create",
+          "deleteTask",
           "deliver",
+          "log",
           "markReady",
+          "materialize",
+          "open",
+          "pause",
+          "post",
+          "react",
+          "receive",
           "release",
+          "removeDir",
+          "resume",
+          "retireScheduled",
+          "revive",
           "spawn"
         ],
         "fleet.outcome": [
           "adopted",
           "already",
+          "created",
+          "deleted",
           "delivered",
           "failed",
           "markedReady",
+          "materialized",
           "moved",
           "opened",
+          "paused",
           "posted",
+          "queued",
+          "reacted",
+          "received",
           "released",
+          "resumed",
+          "revived",
           "spawned",
+          "trustUnmapped",
           "unknown",
-          "unmapped"
+          "unsupported",
+          "workspaceBusy"
         ]
       },
       "prometheus": {
@@ -112,6 +105,135 @@
         ],
         "labels": []
       }
+    },
+    {
+      "name": "fleet.reconcile.duration",
+      "instrument": "histogram",
+      "unit": "s",
+      "attributes": {
+        "fleet.controller": [
+          "ChangeRequestController",
+          "ConversationController",
+          "CronTaskController",
+          "ForgeController",
+          "GatewayController",
+          "ListenerController",
+          "TaskController"
+        ],
+        "fleet.outcome": [
+          "changed",
+          "conflict",
+          "error",
+          "leaseLost",
+          "unchanged"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "fleet_reconcile_duration_seconds_bucket",
+          "fleet_reconcile_duration_seconds_count",
+          "fleet_reconcile_duration_seconds_sum"
+        ],
+        "labels": [
+          "fleet_controller",
+          "fleet_outcome"
+        ]
+      }
+    },
+    {
+      "name": "fleet.runtime.call.duration",
+      "instrument": "histogram",
+      "unit": "s",
+      "attributes": {
+        "fleet.outcome": [
+          "known",
+          "unknown"
+        ],
+        "fleet.runtime": [],
+        "fleet.runtime.verb": []
+      },
+      "prometheus": {
+        "series": [
+          "fleet_runtime_call_duration_seconds_bucket",
+          "fleet_runtime_call_duration_seconds_count",
+          "fleet_runtime_call_duration_seconds_sum"
+        ],
+        "labels": [
+          "fleet_outcome",
+          "fleet_runtime",
+          "fleet_runtime_verb"
+        ]
+      }
+    },
+    {
+      "name": "fleet.sessions",
+      "instrument": "gauge",
+      "unit": "{session}",
+      "attributes": {
+        "fleet.session.state": [
+          "Gone",
+          "Idle",
+          "Lost",
+          "Paused",
+          "Running"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "fleet_sessions"
+        ],
+        "labels": [
+          "fleet_session_state"
+        ]
+      }
+    },
+    {
+      "name": "fleet.task.amendments",
+      "instrument": "counter",
+      "unit": "{amendment}",
+      "attributes": {
+        "fleet.outcome": [
+          "appended",
+          "conflict",
+          "error",
+          "forbidden",
+          "invalid",
+          "notFound",
+          "precondition"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "fleet_task_amendments_total"
+        ],
+        "labels": [
+          "fleet_outcome"
+        ]
+      }
+    },
+    {
+      "name": "fleet.tasks",
+      "instrument": "gauge",
+      "unit": "{task}",
+      "attributes": {
+        "fleet.phase": [
+          "Briefed",
+          "Concluded",
+          "Pending",
+          "Releasing",
+          "Spawned",
+          "Spawning",
+          "Stalled"
+        ]
+      },
+      "prometheus": {
+        "series": [
+          "fleet_tasks"
+        ],
+        "labels": [
+          "fleet_phase"
+        ]
+      }
     }
   ],
   "spans": {
@@ -120,7 +242,10 @@
       "fleet {name}",
       "forge poll",
       "reconcile pass",
-      "reconcile {kind}"
+      "reconcile {kind}",
+      "runtime {verb}",
+      "runtime-mux {verb}",
+      "workspace-git {verb}"
     ],
     "attributes": [
       "fleet.command",
@@ -132,8 +257,18 @@
       "fleet.name",
       "fleet.outcome",
       "fleet.pass",
+      "fleet.runtime",
+      "fleet.runtime.verb",
       "fleet.uid",
-      "process.exit.code"
+      "process.exit.code",
+      "runtime.outcome",
+      "runtime.verb",
+      "workspace.verb"
     ]
-  }
+  },
+  "agent_resource": [
+    "fleet.task",
+    "fleet.uid",
+    "service.name"
+  ]
 }

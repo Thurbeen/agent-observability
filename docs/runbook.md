@@ -1,12 +1,8 @@
 # Runbook
 
-Each section matches one alert in `rules/fleet.rules.yml` or
-`rules/thurbox.rules.yml`.
-
-- **Fleet:** the `job` label names the Fleet manager. Run every `fleet`
-  command with the same `--config` as that manager.
-- **Thurbox:** `job` is always `thurbox`, and `host_name` names the machine
-  when Prometheus promotes `host.name`. Run `thurbox-cli` on that machine.
+Each section matches one alert in `rules/fleet.rules.yml`. The `job` label
+names the Fleet manager. Run every `fleet` command with the same `--config`
+as that manager.
 
 ## FleetNotReconciling
 
@@ -103,54 +99,31 @@ answer.
 Inbox entries waited for about an hour. Fleet delivers an entry only when the
 Task's session is idle. A worker that never goes idle keeps its entries.
 
-1. Fleet v2.4 exports the depth without a Task attribute. Find the Task in
+1. Fleet exports the depth without a Task attribute. Find the Task in
    **Fleet traces**, panel *Effects*, with `effect deliver` spans, or run
    `fleet list task`.
 2. Check the Task's session. If it is busy on purpose, the backlog is
    expected.
 
-## ThurboxSessionsLost
+## FleetSessionsLost
 
-A session's pane went with nobody asking, for 5 minutes. A multiplexer crash
-takes every pane on its server. On psmux, three relaunches within ten minutes
-also end in `lost`.
+A Task's session has been `Lost` for 5 minutes: the runtime still holds the
+session, but its agent's window is gone. Fleet revives a lost session at
+once and again every 30 seconds; after three revives it raises
+`NeedsAttention/ReviveFailed` on the Task.
 
-1. Run `thurbox-cli session list` and find the sessions in state `lost`.
-2. Run `thurbox-cli session restart <id>` to bring one back, or
-   `thurbox-cli session delete <id>` when it is no longer needed.
-3. If every local session went lost at once, check that the multiplexer
-   server still runs. A `watch` started with another `TMUX_TMPDIR` finds no
-   server and reports every local session lost.
+1. Run `fleet list task` and find the Tasks whose session state is `Lost`.
+2. Run `fleet get task <name>` and read the `SessionLost` and
+   `NeedsAttention` conditions.
+3. If every session on one place went lost at once, check that the
+   multiplexer server on that place still runs.
 
-## ThurboxLaunchFailed
+## FleetTasksStalled
 
-A session's agent died before it reported anything, for 5 minutes. Nothing
-runs in the session.
+A Task has been `Stalled` for 5 minutes: its spawn or brief attempts are
+exhausted. A stalled Task waits for a person.
 
-1. Open **Thurbox session events** and find the session's
-   `changed launch_failed` line for its name and agent.
-2. Run `thurbox-cli session list --json`. The session's record holds the
-   launch's exit code and output. Fix the cause: a missing agent binary, a
-   bad argument in `agents.toml`, or a login the agent needs.
-3. Run `thurbox-cli session restart <id>`.
-
-## ThurboxHostUnreachable
-
-Thurbox could not reach a remote host for 15 minutes. Its sessions show as
-`unreachable` placeholders. They are not lost: they come back when the host
-answers.
-
-1. Check that the host is up and that `ssh <host>` works from this machine
-   with the settings in `hosts.toml`.
-2. The **Interface warnings** panel of **Thurbox session events** shows the
-   connection errors when `export_diagnostic_logs` is on.
-
-## ThurboxWaitingOnHuman
-
-Sessions have been blocked on a human, without a break, for an hour. An agent
-waits on a permission prompt or a question. This alert is `info`: route it to
-yourself, not to a pager.
-
-1. Open **Thurbox sessions**, panel *Sessions by state*, and Thurbox's
-   session list to find the blocked sessions.
-2. Answer the prompt in each session.
+1. Run `fleet get task <name>` and read the `NeedsAttention` condition and
+   the last spawn or brief outcome.
+2. Fix the cause (a missing harness, a place that cannot be reached, a
+   workspace that cannot be made), then delete the Task and apply it again.

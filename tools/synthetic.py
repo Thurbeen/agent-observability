@@ -7,20 +7,21 @@
     uv run tools/synthetic.py --hours 1 --collector http://localhost:4318
     uv run tools/synthetic.py --follow                # then one minute a minute
 
-It simulates one Fleet manager and one Thurbox instance minute by minute
+It simulates one Fleet manager and one thurbox interface minute by minute
 and sends what each would have exported, oldest first, over OTLP/HTTP:
 
-- Fleet: cumulative metrics every 60 s and reconcile, effect, forge-poll
-  and command spans;
-- Thurbox: one `automation tick` a minute, with delta metrics, the session
-  gauge and one log record per session event, and a few diagnostic logs;
-- the agents Thurbox launches: Claude Code's token and cost counters and
-  Codex's per-turn token histogram, under the thurbox.* resource attributes
-  Thurbox adds. The opencode and pi sessions export nothing, as those agents
-  have no usage telemetry.
+- Fleet: cumulative metrics every 60 s, with the Tasks by phase and their
+  sessions by state, and reconcile, effect, runtime, forge-poll and command
+  spans;
+- the agents Fleet launches: Claude Code's token and cost counters and
+  Codex's per-turn token histogram, under the fleet.task and fleet.uid
+  resource attributes Fleet adds. The opencode and pi Tasks export nothing,
+  as those agents have no usage telemetry;
+- the thurbox interface: a client span around each fleet command it runs,
+  and a few WARN log lines.
 
-Every metric, label value, span and log event name comes from catalog/, so
-nothing here can drift from what the products export. A fixed seed makes
+Every metric, label value and span name comes from catalog/, so nothing
+here can drift from what the products export. A fixed seed makes
 the run reproducible; only the clock moves.
 """
 
@@ -38,11 +39,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MINUTE = 60 * 10**9
-# The OpenTelemetry SDK's default histogram bounds, which Fleet v2.4 uses for
-# a duration in seconds.
 SDK_BOUNDS = [0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]
-# Thurbox's DURATION_BOUNDS (src/telemetry/mod.rs), in seconds.
-THURBOX_BOUNDS = [1, 5, 15, 30, 60, 120, 300, 600, 1800, 3600, 7200, 28800]
 
 
 def load(product: str) -> dict:
@@ -85,22 +82,30 @@ class Fleet:
 
     KINDS = {"TaskController": "Task", "ChangeRequestController": "ChangeRequest", "ForgeController": "Forge",
              "ConversationController": "Conversation", "ListenerController": "Listener"}
-    # Objects per pass and the mean reconcile in seconds.
     LOAD = {"TaskController": (9, 0.045), "ChangeRequestController": (4, 0.42), "ForgeController": (2, 0.12),
             "ConversationController": (3, 0.02), "ListenerController": (1, 0.008)}
     TASKS = ["docs-refresh", "fix-flaky-test", "renovate-sweep", "release-notes", "api-pagination",
              "cache-eviction", "ci-speedup", "otel-upgrade", "login-timeout"]
+    AGENTS = ["claude", "claude", "codex", "claude", "opencode", "codex", "claude", "pi", "claude"]
+    VERBS = ["start", "deliver", "sessions", "release", "stop"]
 
     def __init__(self, rng: random.Random, start: int, steps: int) -> None:
         self.rng, self.start, self.steps = rng, start, steps
         self.cat = load("fleet")
+        self.claude, self.codex = load("claude-code"), load("codex")
         self.version = self.cat["fleet"]["tag"].lstrip("v")
         self.reconciles: dict[tuple, list[float]] = defaultdict(list)
         self.effects: Counter = Counter()
         self.forge: Counter = Counter()
+        self.amendments: Counter = Counter({"appended": 1})
+        self.runtime: dict[tuple, list[float]] = defaultdict(list)
+        self.usage: dict[str, list[dict[str, int]]] = defaultdict(list)
+        self.last = start
         self.inbox = 1
-        # A forge throttles for 25 minutes, about four hours ago, and another
-        # forge's login expires for a few minutes.
+        self.phases = values(self.cat, "fleet.tasks", "fleet.phase")
+        self.states = values(self.cat, "fleet.sessions", "fleet.session.state")
+        self.stalled = range(int(steps * 0.4), steps + 1)
+        self.lost = range(int(steps * 0.7), int(steps * 0.7) + 9)
         self.throttle = range(int(steps * 0.3), int(steps * 0.3) + 25)
         self.logged_out = range(int(steps * 0.8), int(steps * 0.8) + 4)
 
@@ -159,8 +164,13 @@ class Fleet:
             if kind == "Task" and o == "changed":
                 effect, eo = self.effect(i)
                 if effect:
-                    span(f"effect {effect}", sid, offset + 2 * 10**6, rng.uniform(0.05, 0.9),
-                         {**ident, "fleet.effect": effect, "fleet.outcome": eo}, error=eo == "failed")
+                    d_effect = rng.uniform(0.05, 0.9)
+                    esid = span(f"effect {effect}", sid, offset + 2 * 10**6, d_effect,
+                                {**ident, "fleet.effect": effect, "fleet.outcome": eo}, error=eo == "failed")
+                    verb, ro = self.runtime_call(effect, eo, d_effect * 0.8)
+                    span(f"runtime {verb}", esid, offset + 3 * 10**6, d_effect * 0.8,
+                         {"fleet.runtime": "runtime-mux", "fleet.runtime.verb": verb, "fleet.outcome": ro},
+                         error=ro == "unknown")
             offset += int(d * 1e9)
         # Rare outcomes, once each at a fixed point, so any run shows them.
         if i == int(self.steps * 0.5):
@@ -168,12 +178,19 @@ class Fleet:
             self.reconciles[("TaskController", "error")].append(0.05)
         if i == int(self.steps * 0.55):
             self.effects[("deliver", "unknown")] += 1
-        # The forge polls of the untraced pass.
+            self.amendments["conflict"] += 1
+        if rng.random() < 0.03:
+            self.amendments[pick(values(self.cat, "fleet.task.amendments", "fleet.outcome"), "appended")] += 1
         for k in range(self.LOAD["ChangeRequestController"][0]):
             self.forge_outcome(i, "github.com" if k % 3 else "gitlab.com")
+        for _ in range(len(self.TASKS)):
+            self.runtime_call("probe", "", rng.lognormvariate(math.log(0.03), 0.4))
+        for k, task in enumerate(self.TASKS):
+            if rng.random() < 0.3:
+                self.turn_usage(task, self.AGENTS[k], rng.uniform(1, 12))
 
         traces = [spans]
-        if rng.random() < 0.15:  # a worker's fleet command, from its own session
+        if rng.random() < 0.15:
             trace = secrets.token_hex(16)
             spans = []
             command = rng.choice(["result", "declare", "get", "list"])
@@ -183,7 +200,10 @@ class Fleet:
             traces.append(spans)
 
         self.inbox = max(0, min(6, self.inbox + rng.choice([-1, 0, 0, 0, 1])))
-        return self.metrics(t), {"resourceSpans": [
+        metrics = self.metrics(t)
+        metrics["resourceMetrics"] += self.agent_metrics(t)
+        self.last = t
+        return metrics, {"resourceSpans": [
             {"resource": self.resource(), "scopeSpans": [{"scope": {"name": "fleet"}, "spans": s}]} for s in traces]}
 
     def forge_outcome(self, i: int, host: str) -> str:
@@ -217,210 +237,46 @@ class Fleet:
                       pick(values(self.cat, "fleet.effects", "fleet.outcome"), o))] += 1
         return effect, o
 
-    def resource(self) -> dict:
-        return {"attributes": attrs({"service.name": "fleet", "service.version": self.version,
-                                     "host.name": "devbox"})}
+    def runtime_call(self, effect: str, outcome: str, secs: float) -> tuple[str, str]:
+        verb = {"spawn": "start", "brief": "deliver", "deliver": "deliver", "release": "release",
+                "probe": "sessions"}.get(effect, "sessions")
+        o = "unknown" if outcome in ("failed", "unknown") else "known"
+        self.runtime[(pick(self.VERBS, verb), pick(values(self.cat, "fleet.runtime.call.duration", "fleet.outcome"),
+                                                   o))].append(secs)
+        return verb, o
 
-    def metrics(self, t: int) -> dict:
-        start, now = str(self.start), str(t)
-
-        def point(labels: dict, **v) -> dict:
-            return {"attributes": attrs(labels), "startTimeUnixNano": start, "timeUnixNano": now, **v}
-
-        ms = [
-            {"name": "fleet.reconcile.duration", "unit": "s", "histogram": {"aggregationTemporality": 2, "dataPoints": [
-                point({"fleet.controller": c, "fleet.outcome": o}, **histogram_point(obs, SDK_BOUNDS))
-                for (c, o), obs in sorted(self.reconciles.items())]}},
-            {"name": "fleet.effects", "unit": "{effect}", "sum": {"aggregationTemporality": 2, "isMonotonic": True,
-                "dataPoints": [point({"fleet.effect": e, "fleet.outcome": o}, asInt=str(n))
-                               for (e, o), n in sorted(self.effects.items())]}},
-            {"name": "fleet.forge.calls", "unit": "{call}", "sum": {"aggregationTemporality": 2, "isMonotonic": True,
-                "dataPoints": [point({"fleet.forge.host": h, "fleet.outcome": o}, asInt=str(n))
-                               for (h, o), n in sorted(self.forge.items())]}},
-            {"name": "fleet.inbox.depth", "unit": "{entry}", "gauge": {"dataPoints": [point({}, asInt=str(self.inbox))]}},
-        ]
-        return {"resourceMetrics": [{"resource": self.resource(),
-                                     "scopeMetrics": [{"scope": {"name": "fleet"}, "metrics": [m for m in ms if
-                                         next(iter(v for k, v in m.items() if k not in ("name", "unit")))["dataPoints"]]}]}]}
-
-
-class Session:
-    def __init__(self, sid: str, name: str, agent: str, backend: str, created: int) -> None:
-        self.id, self.name, self.agent, self.backend, self.created = sid, name, agent, backend, created
-        self.state, self.since, self.until = "working", created, created
-
-
-class Thurbox:
-    """One Thurbox instance: its `automation tick` once a minute."""
-
-    NAMES = ["fix-login-timeout", "docs-config-pass", "flaky-e2e-hunt", "otel-dashboards", "renovate-batch",
-             "api-pagination", "release-2-78", "perf-render-loop", "remote-hosts-ssh", "cli-json-output",
-             "theme-contrast", "session-restore", "hook-latency", "worktree-gc", "search-index"]
-    AGENTS = [("claude", 0.45), ("codex", 0.25), ("opencode", 0.15), ("pi", 0.15)]
-    WARNINGS = [
-        "Control mode error, reconnecting: connection reset by peer",
-        "could not list windows on devbox: ssh: connect to host devbox port 22: Connection timed out",
-        "could not publish the perf snapshot: database is locked",
-        "auto-update failed: the release feed did not answer",
-    ]
-
-    def __init__(self, rng: random.Random, start: int, steps: int) -> None:
-        self.rng, self.steps = rng, steps
-        self.cat = load("thurbox")
-        self.version = self.cat["thurbox"]["tag"].lstrip("v")
-        self.states = values(self.cat, "thurbox.sessions", "state")
-        self.reasons = values(self.cat, "thurbox.session.lifecycle", "reason")
-        self.events = set(self.cat["logs"]["events"])
-        self.claude, self.codex = load("claude-code"), load("codex")
-        self.usage: dict[str, tuple[Session, list[dict[str, int]]]] = {}
-        self.sessions: list[Session] = []
-        self.counter = 0
-        self.last = start
-        self.unreachable = range(int(steps * 0.55), int(steps * 0.55) + 18)
-        for k in range(9):
-            s = self.new_session(start - rng.randint(5, 240) * MINUTE)
-            s.state, s.since = rng.choice(["working", "done", "idle", "blocked", "working"]), start
-            s.until = start + int(rng.uniform(1, 20) * MINUTE)
-
-    def new_session(self, at: int) -> Session:
-        r, acc = self.rng.random(), 0.0
-        agent = self.AGENTS[-1][0]
-        for name, p in self.AGENTS:
-            acc += p
-            if r < acc:
-                agent = name
-                break
-        backend = "ssh:devbox" if self.rng.random() < 0.3 else "local-tmux"
-        name = self.NAMES[self.counter % len(self.NAMES)]
-        self.counter += 1
-        s = Session(f"{self.rng.randbytes(4).hex()}-{self.rng.randbytes(2).hex()}-4{self.rng.randbytes(2).hex()[1:]}"
-                    f"-a{self.rng.randbytes(2).hex()[1:]}-{self.rng.randbytes(6).hex()}", name, agent, backend, at)
-        self.sessions.append(s)
-        return s
-
-    def dwell(self, state: str) -> float:
-        """Minutes a session stays in a state."""
-        median = {"working": 6, "blocked": 7, "done": 12, "idle": 25, "background": 4}.get(state, 30)
-        return min(self.rng.lognormvariate(math.log(median), 0.8), 180)
-
-    def step(self, i: int, t: int) -> tuple[dict, dict]:
-        rng, events = self.rng, []
-        measures: list[tuple[str, dict, float]] = []
-
-        def event(s: Session, kind: str, reason: str, at: int, **extra) -> None:
-            name = {"created": "thurbox.session.created", "gone": "thurbox.session.gone"}.get(
-                kind, "thurbox.session.state_changed" if reason == "state" else "thurbox.session.changed")
-            if name not in self.events:
-                sys.exit(f"synthetic: {name} is not a Thurbox log event")
-            events.append((at, name, s, extra if reason == "state" else {"reason": pick(self.reasons, reason), **extra}))
-            if reason == "state":
-                measures.append(("thurbox.session.transitions", {"agent": s.agent, **extra}, 1))
-            else:
-                measures.append(("thurbox.session.lifecycle", {"agent": s.agent, "reason": reason}, 1))
-            if reason == "exited":
-                measures.append(("thurbox.session.exits", {"agent": s.agent, "exit_code": extra["exit_code"]}, 1))
-            if kind == "gone":
-                measures.append(("thurbox.session.lifetime", {"agent": s.agent, "reason": reason},
-                                 (at - s.created) / 1e9))
-
-        def move(s: Session, to: str, at: int) -> None:
-            secs = (at - s.since) / 1e9
-            if s.state == "working":
-                measures.append(("thurbox.turn.duration", {"agent": s.agent, "outcome": pick(self.states, to)}, secs))
-                self.turn_usage(s, secs)
-            elif s.state == "blocked":
-                measures.append(("thurbox.blocked.duration", {"agent": s.agent}, secs))
-            event(s, "changed", "state", at, **{"from": pick(self.states, s.state), "to": pick(self.states, to)})
-            s.state, s.since, s.until = to, at, at + int(self.dwell(to) * MINUTE)
-
-        # New sessions, about one every 25 minutes.
-        if rng.random() < 0.04 or len(self.sessions) < 5:
-            at = t - rng.randint(1, 59) * 10**9
-            s = self.new_session(at)
-            event(s, "created", "spawned", at)
-            event(s, "changed", "state", at + 2 * 10**9, to="working")
-            s.since, s.until = at, at + int(self.dwell("working") * MINUTE)
-
-        for s in list(self.sessions):
-            at = t - rng.randint(1, 58) * 10**9
-            if s.state in ("lost", "failed", "stopped") or s.until > t:
-                if s.state == "failed" and s.until <= t:
-                    event(s, "changed", "relaunched", at)
-                    s.state, s.since, s.until = "working", at, at + int(self.dwell("working") * MINUTE)
-                continue
-            if s.state == "working":
-                r = rng.random()
-                if i == int(self.steps * 0.7) and s.backend == "local-tmux" and not any(
-                        x.state == "lost" for x in self.sessions):
-                    event(s, "changed", "lost", at)  # its pane went with nobody asking
-                    s.state = "lost"
-                    continue
-                move(s, "done" if r < 0.6 else "blocked" if r < 0.85 else "idle" if r < 0.95 else "background", at)
-            elif s.state in ("blocked", "background"):
-                move(s, "working", at)
-            elif s.state == "done":
-                if rng.random() < 0.15:
-                    event(s, "changed", "exited", at, exit_code=0 if rng.random() < 0.85 else 1)
-                    event(s, "gone", "soft_deleted", at + 3 * 10**9)
-                    self.sessions.remove(s)
-                else:
-                    move(s, "working" if rng.random() < 0.7 else "idle", at)
-            elif s.state == "idle":
-                move(s, "working", at)
-        if i == int(self.steps * 0.4):  # one launch fails and is relaunched
-            s = self.new_session(t - 30 * 10**9)
-            event(s, "created", "spawned", t - 30 * 10**9)
-            event(s, "changed", "launch_failed", t - 25 * 10**9)
-            s.state, s.until = "failed", t + 8 * MINUTE
-
-        gauge = Counter()
-        groups = {(s.agent, s.backend) for s in self.sessions}
-        for s in self.sessions:
-            remote_down = s.backend.startswith("ssh:") and i in self.unreachable
-            gauge[(s.agent, s.backend, "unreachable" if remote_down else s.state)] += 1
-        diagnostics = []
-        if rng.random() < 0.03 or i in (self.unreachable.start, self.unreachable.start + 4):
-            text = self.WARNINGS[1] if i in self.unreachable else rng.choice(self.WARNINGS)
-            diagnostics.append((t - rng.randint(1, 59) * 10**9, text))
-        metrics = self.metrics(t, measures, [((a, b, st), gauge[(a, b, st)]) for a, b in sorted(groups)
-                                             for st in self.states])
-        metrics["resourceMetrics"] += self.agent_metrics(t)
-        self.last = t
-        return metrics, self.logs(sorted(events, key=lambda e: e[0]), diagnostics)
-
-    def turn_usage(self, s: Session, secs: float) -> None:
-        """One turn's tokens, the way the session's agent reports them."""
-        rng, minutes = self.rng, max(secs / 60, 0.5)
-        if s.agent == "claude":
+    def turn_usage(self, task: str, agent: str, minutes: float) -> None:
+        """One turn's tokens, the way the Task's agent reports them."""
+        rng = self.rng
+        if agent == "claude":
             types = values(self.claude, "claude_code.token.usage", "type")
-            self.turn(s, {
+            self.usage[task].append({
                 pick(types, "input"): int(rng.uniform(800, 4000) * minutes ** 0.5),
                 pick(types, "cacheRead"): int(rng.uniform(30_000, 90_000) * minutes ** 0.7),
                 pick(types, "cacheCreation"): int(rng.uniform(2_000, 12_000) * minutes ** 0.5),
                 pick(types, "output"): int(rng.uniform(400, 2_500) * minutes ** 0.6),
             })
-        elif s.agent == "codex":
+        elif agent == "codex":
             types = values(self.codex, "codex.turn.token_usage", "token_type")
             given = int(rng.uniform(25_000, 80_000) * minutes ** 0.7)
             output = int(rng.uniform(500, 3_000) * minutes ** 0.6)
-            # Codex counts cached input inside input, and reasoning inside output.
-            self.turn(s, {
+            self.usage[task].append({
                 pick(types, "input"): given, pick(types, "cached_input"): int(given * rng.uniform(0.75, 0.92)),
                 pick(types, "cache_write_input"): 0, pick(types, "output"): output,
                 pick(types, "reasoning_output"): int(output * rng.uniform(0.3, 0.6)),
                 pick(types, "total"): given + output,
             })
 
-    def turn(self, s: Session, tokens: dict[str, int]) -> None:
-        self.usage.setdefault(s.id, (s, []))[1].append(tokens)
-
     def agent_metrics(self, t: int) -> list[dict]:
-        """This minute's agent telemetry, one resource per session, as deltas."""
+        """This minute's agent telemetry, one resource per Task, as deltas."""
         start, now, out = str(self.last), str(t), []
-        for s, turns in self.usage.values():
+        for task, turns in self.usage.items():
+            agent = self.AGENTS[self.TASKS.index(task)]
             tokens = {k: sum(t[k] for t in turns) for k in turns[0]}
-            resource = {"thurbox.session.id": s.id, "thurbox.session.name": s.name, "thurbox.agent": s.agent}
-            if s.agent == "claude":
+            resource = {"service.name": agent, "fleet.task": task, "fleet.uid": f"u{1000 + self.TASKS.index(task)}-task"}
+            if set(resource) - {"service.name"} - set(self.cat["agent_resource"]):
+                sys.exit("synthetic: a resource attribute Fleet does not add to an agent")
+            if agent == "claude":
                 cost = (tokens["input"] * 3 + tokens["cacheRead"] * 0.3 + tokens["cacheCreation"] * 3.75
                         + tokens["output"] * 15) / 1e6
                 point = lambda labels, **v: {"attributes": attrs(labels), "startTimeUnixNano": start,
@@ -432,62 +288,120 @@ class Thurbox:
                     {"name": "claude_code.cost.usage", "unit": "USD", "sum": {
                         "aggregationTemporality": 1, "isMonotonic": True, "dataPoints": [point({}, asDouble=cost)]}},
                 ]
-                service = {"service.name": "claude-code", "service.version": "2.1.312"}
             else:
                 metrics = [{"name": "codex.turn.token_usage", "histogram": {"aggregationTemporality": 1, "dataPoints": [
                     {"attributes": attrs({"token_type": k}), "startTimeUnixNano": start, "timeUnixNano": now,
                      **histogram_point([float(t[k]) for t in turns], SDK_BOUNDS)} for k in tokens]}}]
-                service = {"service.name": "codex_cli_rs", "service.version": "0.166.0"}
             for m in metrics:
                 if m["name"] not in {c["name"] for c in self.claude["metrics"] + self.codex["metrics"]}:
                     sys.exit(f"synthetic: {m['name']} is not in an agent catalog")
-            out.append({"resource": {"attributes": attrs({**service, **resource})},
-                        "scopeMetrics": [{"scope": {"name": service["service.name"]}, "metrics": metrics}]})
-        self.usage = {}
+            out.append({"resource": {"attributes": attrs(resource)},
+                        "scopeMetrics": [{"scope": {"name": agent}, "metrics": metrics}]})
+        self.usage = defaultdict(list)
         return out
 
+    def task_phases(self, i: int) -> tuple[Counter, Counter]:
+        phases, states = Counter(), Counter()
+        for k in range(len(self.TASKS)):
+            phase = ["Briefed", "Briefed", "Concluded", "Spawned", "Briefed", "Concluded", "Briefed", "Briefed",
+                     "Releasing" if i % 30 < 3 else "Concluded"][k]
+            if k == 7 and i in self.stalled:
+                phase = "Stalled"
+            phases[pick(self.phases, phase)] += 1
+            if phase in ("Stalled", "Releasing"):
+                continue
+            state = "Running" if phase in ("Spawned", "Briefed") else "Idle"
+            if k == 1 and i in self.lost:
+                state = "Lost"
+            if k == 5 and i % 90 > 60:
+                state = "Paused"
+            states[pick(self.states, state)] += 1
+        return phases, states
+
     def resource(self) -> dict:
-        return {"attributes": attrs({"service.name": "thurbox", "service.version": self.version,
-                                     "host.name": "workstation", "thurbox.instance": "thurbox"})}
+        return {"attributes": attrs({"service.name": "fleet", "service.version": self.version})}
 
-    def metrics(self, t: int, measures: list, gauge: list) -> dict:
-        start, now = str(self.last), str(t)
-        sums: dict[str, Counter] = defaultdict(Counter)
-        hists: dict[str, dict] = defaultdict(lambda: defaultdict(list))
-        for name, labels, v in measures:
-            key = tuple(sorted(labels.items()))
-            if name.endswith(("duration", "lifetime")):
-                hists[name][key].append(v)
-            else:
-                sums[name][key] += 1
-        units = {m["name"]: m["unit"] for m in self.cat["metrics"]}
-        out = []
-        for name, series in sorted(sums.items()):
-            out.append({"name": name, "unit": units[name], "sum": {"aggregationTemporality": 1, "isMonotonic": True,
-                "dataPoints": [{"attributes": attrs(dict(k)), "startTimeUnixNano": start, "timeUnixNano": now,
-                                "asInt": str(n)} for k, n in sorted(series.items())]}})
-        for name, series in sorted(hists.items()):
-            out.append({"name": name, "unit": units[name], "histogram": {"aggregationTemporality": 1,
-                "dataPoints": [{"attributes": attrs(dict(k)), "startTimeUnixNano": start, "timeUnixNano": now,
-                                **histogram_point(obs, THURBOX_BOUNDS)} for k, obs in sorted(series.items())]}})
-        out.append({"name": "thurbox.sessions", "unit": units["thurbox.sessions"], "gauge": {"dataPoints": [
-            {"attributes": attrs({"state": st, "agent": a, "backend": b}), "timeUnixNano": now, "asInt": str(n)}
-            for (a, b, st), n in gauge]}})
+    def metrics(self, t: int) -> dict:
+        start, now = str(self.start), str(t)
+        phases, states = self.task_phases((t - self.start) // MINUTE - 10)
+
+        def point(labels: dict, **v) -> dict:
+            return {"attributes": attrs(labels), "startTimeUnixNano": start, "timeUnixNano": now, **v}
+
+        ms = [
+            {"name": "fleet.reconcile.duration", "unit": "s", "histogram": {"aggregationTemporality": 2, "dataPoints": [
+                point({"fleet.controller": c, "fleet.outcome": o}, **histogram_point(obs, SDK_BOUNDS))
+                for (c, o), obs in sorted(self.reconciles.items())]}},
+            {"name": "fleet.runtime.call.duration", "unit": "s", "histogram": {"aggregationTemporality": 2,
+                "dataPoints": [point({"fleet.runtime": "runtime-mux", "fleet.runtime.verb": v, "fleet.outcome": o},
+                                     **histogram_point(obs, SDK_BOUNDS))
+                               for (v, o), obs in sorted(self.runtime.items())]}},
+            {"name": "fleet.effects", "unit": "{effect}", "sum": {"aggregationTemporality": 2, "isMonotonic": True,
+                "dataPoints": [point({"fleet.effect": e, "fleet.outcome": o}, asInt=str(n))
+                               for (e, o), n in sorted(self.effects.items())]}},
+            {"name": "fleet.forge.calls", "unit": "{call}", "sum": {"aggregationTemporality": 2, "isMonotonic": True,
+                "dataPoints": [point({"fleet.forge.host": h, "fleet.outcome": o}, asInt=str(n))
+                               for (h, o), n in sorted(self.forge.items())]}},
+            {"name": "fleet.task.amendments", "unit": "{amendment}", "sum": {"aggregationTemporality": 2,
+                "isMonotonic": True, "dataPoints": [point({"fleet.outcome": o}, asInt=str(n))
+                                                    for o, n in sorted(self.amendments.items())]}},
+            {"name": "fleet.inbox.depth", "unit": "{entry}", "gauge": {"dataPoints": [point({}, asInt=str(self.inbox))]}},
+            {"name": "fleet.tasks", "unit": "{task}", "gauge": {"dataPoints": [
+                point({"fleet.phase": ph}, asInt=str(phases[ph])) for ph in self.phases]}},
+            {"name": "fleet.sessions", "unit": "{session}", "gauge": {"dataPoints": [
+                point({"fleet.session.state": st}, asInt=str(states[st])) for st in self.states]}},
+        ]
         return {"resourceMetrics": [{"resource": self.resource(),
-                                     "scopeMetrics": [{"scope": {"name": "thurbox"}, "metrics": out}]}]}
+                                     "scopeMetrics": [{"scope": {"name": "fleet"}, "metrics": [m for m in ms if
+                                         next(iter(v for k, v in m.items() if k not in ("name", "unit")))["dataPoints"]]}]}]}
 
-    def logs(self, events: list, diagnostics: list) -> dict:
-        records = [{"timeUnixNano": str(at), "observedTimeUnixNano": str(at), "severityNumber": 9,
-                    "severityText": "INFO", "eventName": name, "body": {"stringValue": name},
-                    "attributes": attrs({"thurbox.session.id": s.id, "thurbox.session.name": s.name,
-                                         "agent": s.agent, **detail})}
-                   for at, name, s, detail in events]
-        warnings = [{"timeUnixNano": str(at), "observedTimeUnixNano": str(at), "severityNumber": 13,
-                     "severityText": "WARN", "body": {"stringValue": text}} for at, text in diagnostics]
-        scopes = [{"scope": {"name": "thurbox"}, "logRecords": records}]
-        if warnings:
-            scopes.append({"scope": {"name": "thurbox"}, "logRecords": warnings})
-        return {"resourceLogs": [{"resource": self.resource(), "scopeLogs": scopes}]}
+
+class Thurbox:
+    """One thurbox interface: the fleet commands it runs, and its warnings."""
+
+    COMMANDS = [("list", 0.5), ("version", 0.2), ("apply", 0.1), ("send", 0.1), ("delete", 0.05), ("get", 0.05)]
+    WARNINGS = [
+        "fleet watch exited (exit status: 1): the store is locked",
+        "fleet version: the command timed out after 5s",
+        "could not publish the perf snapshot: database is locked",
+        "auto-update failed: the release feed did not answer",
+    ]
+
+    def __init__(self, rng: random.Random) -> None:
+        self.rng, self.ticks = rng, 0
+        self.cat = load("thurbox")
+        self.version = self.cat["thurbox"]["tag"].lstrip("v")
+        if "fleet {verb}" not in self.cat["spans"]["names"]:
+            sys.exit("synthetic: the interface no longer spans its fleet commands")
+
+    def step(self, t: int) -> tuple[dict, dict]:
+        rng, spans = self.rng, []
+        for _ in range(rng.randint(2, 6)):
+            r, acc, command = rng.random(), 0.0, "list"
+            for name, w in self.COMMANDS:
+                acc += w
+                if r < acc:
+                    command = name
+                    break
+            begin = t - rng.randint(1, 59) * 10**9
+            spans.append({"traceId": secrets.token_hex(16), "spanId": rng.randbytes(8).hex(), "parentSpanId": "",
+                          "name": f"fleet {command}", "kind": 3, "startTimeUnixNano": str(begin),
+                          "endTimeUnixNano": str(begin + int(rng.lognormvariate(math.log(0.08), 0.6) * 1e9)),
+                          "attributes": attrs({"fleet.command": command})})
+        warnings = []
+        self.ticks += 1
+        if rng.random() < 0.03 or self.ticks % 40 == 1:
+            at = t - rng.randint(1, 59) * 10**9
+            warnings.append({"timeUnixNano": str(at), "observedTimeUnixNano": str(at), "severityNumber": 13,
+                             "severityText": "WARN", "body": {"stringValue": rng.choice(self.WARNINGS)}})
+        return ({"resourceSpans": [{"resource": self.resource(), "scopeSpans": [
+                    {"scope": {"name": "thurbox"}, "spans": spans}]}]},
+                {"resourceLogs": [{"resource": self.resource(), "scopeLogs": [
+                    {"scope": {"name": "thurbox"}, "logRecords": warnings}]}]})
+
+    def resource(self) -> dict:
+        return {"attributes": attrs({"service.name": self.cat["service"], "service.version": self.version,
+                                     "thurbox.instance": "thurbox"})}
 
 
 def send(collector: str, signal: str, body: dict) -> None:
@@ -514,15 +428,15 @@ def main() -> None:
     end = time.time_ns() // MINUTE * MINUTE
     start = end - steps * MINUTE
     rng = random.Random(a.seed)
-    fleet, thurbox = Fleet(rng, start - 10 * MINUTE, steps), Thurbox(rng, start, steps)
+    fleet, thurbox = Fleet(rng, start - 10 * MINUTE, steps), Thurbox(rng)
 
     def tick(i: int) -> None:
         t = start + i * MINUTE
         metrics, traces = fleet.step(i, t)
         send(a.collector, "metrics", metrics)
         send(a.collector, "traces", traces)
-        metrics, logs = thurbox.step(i, t)
-        send(a.collector, "metrics", metrics)
+        traces, logs = thurbox.step(t)
+        send(a.collector, "traces", traces)
         send(a.collector, "logs", logs)
 
     for i in range(steps + 1):

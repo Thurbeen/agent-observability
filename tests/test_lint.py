@@ -38,6 +38,8 @@ class PromQL(unittest.TestCase):
     def test_accepts_exported_names(self):
         self.assertEqual(promql('sum by (fleet_controller) (rate(fleet_reconcile_duration_seconds_count'
                                 '{job=~"$job",fleet_outcome=~"error|leaseLost"}[5m]))'), [])
+        self.assertEqual(promql('sum by (fleet_phase) (fleet_tasks{fleet_phase=~"Stalled|Releasing"})'), [])
+        self.assertEqual(promql('fleet_sessions{fleet_session_state="Lost"}'), [])
 
     def test_rejects_unknown_metric(self):
         self.assertTrue(promql("rate(fleet_tasks_total[5m])"))
@@ -46,10 +48,11 @@ class PromQL(unittest.TestCase):
         self.assertTrue(promql("fleet_inbox_depth_total"))
 
     def test_rejects_unknown_label(self):
-        self.assertTrue(promql('fleet_effects_total{fleet_phase="Releasing"}'))
+        self.assertTrue(promql('fleet_effects_total{fleet_state="Releasing"}'))
 
     def test_rejects_unknown_label_value(self):
         self.assertTrue(promql('fleet_forge_calls_total{fleet_outcome=~"known|notloggedin"}'))
+        self.assertTrue(promql('fleet_sessions{fleet_session_state="lost"}'))
 
     def test_rejects_unrecorded_series(self):
         self.assertTrue(promql("job:fleet_missing:rate5m > 0"))
@@ -57,31 +60,24 @@ class PromQL(unittest.TestCase):
 
 
 class ThurboxPromQL(unittest.TestCase):
-    def test_accepts_exported_names(self):
-        self.assertEqual(promql('sum by (state) (thurbox_sessions{job="thurbox",state=~"blocked|lost"})'), [])
-        self.assertEqual(promql('thurbox_session_lifecycle_total{reason="launch_failed",thurbox_session_id!=""}'), [])
+    def test_rejects_the_session_metrics_v3_removed(self):
+        self.assertTrue(promql('sum by (state) (thurbox_sessions{job="thurbox"})'))
+        self.assertTrue(promql("thurbox_turn_duration_seconds_bucket"))
 
-    def test_rejects_unknown_metric(self):
-        self.assertTrue(promql("thurbox_tokens_total"))
+    def test_rejects_the_agent_labels_v3_removed(self):
+        self.assertTrue(promql('claude_code_token_usage_tokens_total{thurbox_agent!=""}'))
 
-    def test_rejects_unknown_state(self):
-        self.assertTrue(promql('thurbox_sessions{state="waiting"}'))
-
-    def test_rejects_unknown_reason(self):
-        self.assertTrue(promql('thurbox_session_lifecycle_total{reason="crashed"}'))
+    def test_accepts_the_task_fleet_adds_to_each_agent(self):
+        self.assertEqual(promql('claude_code_token_usage_tokens_total{fleet_task!="",type="cacheRead"}'), [])
 
 
 class LogQL(unittest.TestCase):
-    def test_accepts_exported_events(self):
-        self.assertEqual(logql('{service_name="thurbox"} |= "thurbox.session.gone" | agent =~ "$agent" '
-                               '| line_format "{{.thurbox_session_name}} {{.reason}}"'), [])
+    def test_accepts_the_interface_log_lines(self):
+        self.assertEqual(logql('{service_name="thurbox"} | detected_level =~ "warn|error"'), [])
 
-    def test_rejects_unknown_event(self):
-        self.assertTrue(logql('{service_name="thurbox"} |= "thurbox.session.turn_ended"'))
-
-    def test_rejects_unknown_attribute(self):
-        self.assertTrue(logql('{service_name="thurbox"} | thurbox_session_cost > 1'))
-        self.assertTrue(logql('{service_name="thurbox"} | line_format "{{.tokens}}"'))
+    def test_rejects_the_session_events_v3_removed(self):
+        self.assertTrue(logql('{service_name="thurbox"} |= "thurbox.session.gone"'))
+        self.assertTrue(logql('{service_name="thurbox"} | line_format "{{.thurbox_session_name}}"'))
 
 
 class TraceQL(unittest.TestCase):
@@ -94,6 +90,11 @@ class TraceQL(unittest.TestCase):
 
     def test_rejects_unknown_span_attribute(self):
         self.assertTrue(traceql("{ span.fleet.phase = \"Releasing\" }"))
+
+    def test_accepts_the_interface_and_runtime_spans(self):
+        self.assertEqual(traceql('{ resource.service.name = "thurbox" && name =~ "fleet .+" } '
+                                 '| rate() by (span.fleet.command)'), [])
+        self.assertEqual(traceql('{ name =~ "runtime-mux .+" && span.runtime.outcome = "unknown" }'), [])
 
 
 class Repository(unittest.TestCase):

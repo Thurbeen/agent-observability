@@ -1,0 +1,315 @@
+{
+  "uid": "thurbox-interface",
+  "title": "Thurbox interface",
+  "description": "The thurbox interface's Fleet commands from its spans, and its warnings from its logs.",
+  "tags": [
+    "agent-observability",
+    "thurbox"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "schemaVersion": 41,
+  "templating": {
+    "list": [
+      {
+        "name": "tempo",
+        "label": "Tempo",
+        "type": "datasource",
+        "query": "tempo",
+        "hide": 0,
+        "current": {},
+        "options": [],
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false
+      },
+      {
+        "name": "loki",
+        "label": "Loki",
+        "type": "datasource",
+        "query": "loki",
+        "hide": 0,
+        "current": {},
+        "options": [],
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "agent-observability"
+      ],
+      "title": "Agents",
+      "asDropdown": true,
+      "includeVars": false,
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Fleet commands",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Fleet commands per second by command",
+      "description": "The fleet commands the interface ran and waited for, from its client spans.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "${tempo}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "${tempo}"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"thurbox\" && name =~ \"fleet .+\" } | rate() by (span.fleet.command)",
+          "metricsQueryType": "range",
+          "step": "1m"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Fleet command p50 / p95",
+      "description": "Quantiles of a fleet command as the interface waited for it.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "${tempo}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "${tempo}"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"thurbox\" && name =~ \"fleet .+\" } | quantile_over_time(duration, .5, .95)",
+          "metricsQueryType": "range",
+          "step": "1m"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Slowest fleet commands",
+      "datasource": {
+        "type": "tempo",
+        "uid": "${tempo}"
+      },
+      "description": "Fleet commands the interface ran. Each one's trace continues into fleet, runtime-mux and workspace-git.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "${tempo}"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"thurbox\" && name =~ \"fleet .+\" }",
+          "limit": 20,
+          "spss": 3,
+          "tableType": "spans"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 9
+      }
+    },
+    {
+      "type": "row",
+      "title": "Log lines",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Log lines by level",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "interval": "10m",
+      "description": "The interface's own WARN and ERROR lines per 10 minutes.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "legendFormat": "{{detected_level}}",
+          "expr": "sum by (detected_level) (count_over_time({service_name=\"thurbox\"} [$__interval]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 24,
+        "h": 6
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Interface warnings",
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "description": "The interface's WARN and ERROR log lines, exported when OTEL_LOGS_EXPORTER=otlp is set.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${loki}"
+          },
+          "expr": "{service_name=\"thurbox\"}",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": false,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 24,
+        "h": 12
+      }
+    }
+  ]
+}

@@ -29,18 +29,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FILES = {
     "fleet": {
-        "telemetry": "crates/fleet-manager/src/telemetry.rs",
-        "manager": "crates/fleet-manager/src/lib.rs",
+        "manager": "crates/fleet-manager/src/telemetry.rs",
+        "runtime": "crates/fleet-runtime/src/telemetry.rs",
+        "controllers": "crates/fleet-manager/src/lib.rs",
+        "cron": "crates/fleet-manager/src/cron_tasks.rs",
+        "verbs": "crates/fleet-manager/src/verbs.rs",
         "plan": "crates/fleet-api/src/plan.rs",
-        "export": "crates/fleet-telemetry/src/lib.rs",
+        "phases": "crates/fleet-api/src/task.rs",
+        "sessions": "crates/fleet-api/src/session.rs",
+        "harness": "crates/fleet-api/src/harness.rs",
+        "cli": "crates/fleet-cli/src/main.rs",
+        "runtime_mux": "crates/runtime-mux/src/main.rs",
+        "workspace_git": "crates/workspace-git/src/main.rs",
+        "docs": "docs/observability.md",
     },
     "thurbox": {
-        "telemetry": "src/telemetry/mod.rs",
-        "summary": "src/telemetry/summary.rs",
-        "states": "src/session/hook_status.rs",
-        "events": "src/storage/session_events.rs",
-        "config": "docs/CONFIG.md",
-        "launch": "src/session_ops/telemetry.rs",
+        "telemetry": "crates/thurbox/src/telemetry/mod.rs",
+        "link": "crates/thurbox/src/fleet_link.rs",
+        "otel": "crates/otel-env/src/lib.rs",
     },
     "codex": {
         "names": "codex-rs/otel/src/metrics/names.rs",
@@ -49,11 +55,12 @@ FILES = {
     "claude-code": {"docs": "monitoring-usage.md"},
 }
 SOURCES = {
-    "fleet": "https://raw.githubusercontent.com/Thurbeen/fleet/{tag}/{path}",
+    "fleet": "https://raw.githubusercontent.com/Thurbeen/thurbox/{tag}/{path}",
     "thurbox": "https://raw.githubusercontent.com/Thurbeen/thurbox/{tag}/{path}",
     "codex": "https://raw.githubusercontent.com/openai/codex/{tag}/{path}",
     "claude-code": "https://code.claude.com/docs/en/{path}",
 }
+REPOSITORY = "https://github.com/Thurbeen/thurbox"
 
 
 def fetch(product: str, tag: str, source: Path | None) -> dict[str, str]:
@@ -91,8 +98,18 @@ def formatted(src: str) -> list[str]:
     an error status's text is not a span name."""
     return [
         f"{verb} {{{inline or arg.split('.')[-1]}}}"
-        for verb, inline, arg in re.findall(r'(?<!error\()format!\(\s*"(\w+) \{(\w*)\}"(?:\s*,\s*([\w.]+))?', src)
+        for verb, inline, arg in re.findall(r'(?<!error\()format!\(\s*"([\w-]+) \{(\w*)\}"(?:\s*,\s*([\w.]+))?', src)
     ]
+
+
+def keys(src: str) -> list[str]:
+    return re.findall(r'KeyValue::new\(\s*"([^"]+)"', src)
+
+
+def variants(src: str, enum: str) -> list[str]:
+    """The variants listed in `pub const ALL: &[Enum] = &[...]`."""
+    m = re.search(rf"const ALL: &\[{enum}\] = &\[(.*?)\];", src, re.S)
+    return re.findall(rf"{enum}::(\w+)", m.group(1)) if m else []
 
 
 def need(values: list, what: str) -> list:
@@ -116,158 +133,101 @@ def prometheus_names(name: str, instrument: str, unit: str) -> list[str]:
 
 
 def derive_fleet(tag: str, src: dict[str, str]) -> dict:
-    tel = src["telemetry"]
-    instruments = re.findall(
-        r'(\w+):\s*meter\s*\.\s*(?:f64|u64|i64)_(histogram|counter|gauge)\(\s*"([^"]+)"\s*\)'
-        r'\s*\.with_unit\(\s*"([^"]*)"\s*\)',
-        tel,
-    )
-    need(instruments, "instruments")
-    attrs = {
-        field: re.findall(r'KeyValue::new\(\s*"([^"]+)"', kvs)
-        for field, kvs in re.findall(
-            r"instruments\(\)\s*\.(\w+)\s*\.\s*(?:record|add)\(\s*[^,]+,\s*&\[(.*?)\]\s*,?\s*\)",
-            tel,
-            re.S,
+    """Fleet's metrics and the spans of the programs it runs, from the
+    thurbox monorepo. Names, kinds and units come from the code; the
+    attributes of each metric from the table in docs/observability.md,
+    checked against the keys the code sets."""
+    code = src["manager"] + src["runtime"]
+    instruments = {
+        name: (k, unit)
+        for k, name, unit in re.findall(
+            r'\.(?:f64|u64|i64)_(histogram|counter|gauge)\(\s*"([^"]+)"\s*\)\s*\.with_unit\(\s*"([^"]*)"\s*\)', code
         )
     }
+    need(list(instruments), "instruments")
+    rows = re.findall(r"^\| `(fleet\.[\w.]+)` \| (\w+) \| `([^`]*)` \| (.+?) \|$", src["docs"], re.M)
+    documented = {n: (k, u, re.findall(r"`([\w.]+)`", a)) for n, k, u, a in need(rows, "metric table")}
+    if sorted(documented) != sorted(instruments):
+        sys.exit(f"catalog: docs/observability.md lists {sorted(documented)}, the code builds {sorted(instruments)}")
 
     controllers = need(
-        re.findall(r'telemetry::reconcile\(\s*"(\w+)"', src["manager"]), "controllers"
+        re.findall(r'telemetry::reconcile\(\s*"(\w+)"', src["controllers"] + src["cron"]), "controllers"
     )
+    create = re.search(r'pub const CREATE_ACTION: &str = "(\w+)"', src["plan"])
     effects = need(
-        literals(body(src["plan"], "name")) + literals(body(tel, "effect_kind")),
+        literals(body(src["plan"], "name")) + literals(body(src["manager"], "effect_kind"))
+        + ([create.group(1)] if create else []),
         "effect kinds",
     )
+    runtime_outcomes = re.findall(r'if known \{ "(\w+)" \} else \{ "(\w+)" \}', src["runtime"])
     values = {
         "fleet.reconcile.duration": {
             "fleet.controller": controllers,
-            "fleet.outcome": need(literals(body(tel, "reconcile")), "reconcile outcomes"),
+            "fleet.outcome": need(literals(body(src["manager"], "reconcile")), "reconcile outcomes"),
         },
         "fleet.effects": {
             "fleet.effect": effects,
-            "fleet.outcome": need(literals(body(tel, "effect_outcome")), "effect outcomes"),
+            "fleet.outcome": need(literals(body(src["manager"], "effect_outcome")), "effect outcomes"),
         },
         "fleet.forge.calls": {
-            "fleet.forge.host": [],  # any forge host name
             "fleet.outcome": need(
-                literals(body(tel, "forge_poll")) + literals(body(tel, "uncertainty")),
+                literals(body(src["manager"], "forge_poll")) + literals(body(src["manager"], "uncertainty")),
                 "forge outcomes",
             ),
         },
-    }
-
-    metrics = []
-    for field, instrument, name, unit in instruments:
-        if field not in attrs:
-            sys.exit(f"catalog: no recording of instrument {field}")
-        labels = sorted(attrs[field])
-        known = values.get(name, {})
-        if sorted(known) != labels and known:
-            sys.exit(f"catalog: {name} records {labels}, expected {sorted(known)}")
-        metrics.append(
-            {
-                "name": name,
-                "instrument": instrument,
-                "unit": unit,
-                "attributes": {a: known.get(a, []) for a in labels},
-                "prometheus": {
-                    "series": prometheus_names(name, instrument, unit),
-                    "labels": [a.replace(".", "_") for a in labels],
-                },
-            }
-        )
-
-    span_names = need(
-        re.findall(r'Current::start\(\s*"([^"]+)"', tel)
-        + formatted(tel)
-        + formatted(src["export"]),
-        "span names",
-    )
-    span_attrs = need(
-        re.findall(r'KeyValue::new\(\s*"([^"]+)"', tel)
-        # Only span attributes: the export crate also builds the resource.
-        + re.findall(r'set_attribute\(KeyValue::new\(\s*"([^"]+)"', src["export"]),
-        "span attributes",
-    )
-    return {
-        "fleet": {"repository": "https://github.com/Thurbeen/fleet", "tag": tag},
-        "metrics": metrics,
-        "spans": {"names": span_names, "attributes": span_attrs},
-    }
-
-
-def derive_thurbox(tag: str, src: dict[str, str]) -> dict:
-    """Thurbox's own session metrics and session event logs (ADR-37).
-
-    Names, kinds and units come from the code; the attributes of each metric
-    from the table in docs/CONFIG.md, checked against the keys the code sets.
-    """
-    tel, summary = src["telemetry"], src["summary"]
-    kind = {"counter": "counter", "gauge": "gauge", "histogram": "histogram"}
-    instruments = {
-        name: (kind[k], unit)
-        for k, name, unit in re.findall(
-            r'meter\s*\.(?:u64|i64|f64)_(counter|gauge)\(\s*"([^"]+)"\s*\)\s*\.with_unit\(\s*"([^"]*)"\s*\)', tel
-        )
-    }
-    histogram_unit = re.search(r'f64_histogram\(name\)\s*\.with_unit\(\s*"([^"]*)"\s*\)', tel)
-    for name in re.findall(r'duration\(\s*"([^"]+)"', tel):
-        instruments[name] = ("histogram", histogram_unit.group(1) if histogram_unit else "")
-    need(list(instruments), "instruments")
-
-    rows = re.findall(r"^\| `(thurbox\.[\w.]+)` \| (\w+) \| `([^`]*)` \| (.+?) \|$", src["config"], re.M)
-    documented = {name: (k, unit, re.findall(r"`([\w.]+)`", attrs)) for name, k, unit, attrs in need(rows, "metric table")}
-    if sorted(documented) != sorted(instruments):
-        sys.exit(f"catalog: docs/CONFIG.md lists {sorted(documented)}, the code builds {sorted(instruments)}")
-    keys = set(re.findall(r'KeyValue::new\(\s*"([^"]+)"', summary))
-    state_words = need(literals(body(src["states"], "impl SessionState")), "session states")
-    lost = re.search(r'pub const LOST: &str = "(\w+)"', summary)
-    # "state" is a transition, counted by thurbox.session.transitions instead.
-    reasons = [r for r in need(literals(body(src["events"], "impl EventReason")), "event reasons") if r != "state"]
-    values = {
-        "state": state_words + ([lost.group(1)] if lost else []),
-        "from": state_words,
-        "to": state_words,
-        "outcome": state_words,
-        "reason": reasons,
+        "fleet.runtime.call.duration": {
+            "fleet.outcome": need([o for pair in runtime_outcomes for o in pair], "runtime call outcomes"),
+        },
+        "fleet.task.amendments": {
+            "fleet.outcome": need(literals(body(src["verbs"], "amend")), "amendment outcomes"),
+        },
+        "fleet.tasks": {"fleet.phase": need(variants(src["phases"], "Phase"), "Task phases")},
+        "fleet.sessions": {"fleet.session.state": need(variants(src["sessions"], "SessionState"), "session states")},
     }
 
     metrics = []
     for name, (k, unit, attrs) in sorted(documented.items()):
         if (k, unit) != instruments[name]:
             sys.exit(f"catalog: {name} is documented as {k} {unit}, built as {instruments[name]}")
-        missing = set(attrs) - keys
-        if missing:
-            sys.exit(f"catalog: {name} documents {sorted(missing)}, which the code never sets")
-        labels = sorted(attrs)
-        metrics.append(
-            {
-                "name": name,
-                "instrument": k,
-                "unit": unit,
-                "attributes": {a: sorted(set(values.get(a, []))) for a in labels},
-                "prometheus": {
-                    "series": prometheus_names(name, k, unit),
-                    "labels": labels,
-                },
-            }
-        )
+        if not all(f'"{a}"' in code for a in attrs):
+            sys.exit(f"catalog: {name} documents {sorted(attrs)}, which the code never sets")
+        known = values.get(name, {})
+        metrics.append(metric(name, k, unit, {a: known.get(a, []) for a in attrs}))
 
-    literal_names = set(re.findall(r'"(thurbox\.session\.\w+)"', summary))
-    events = need(sorted(literal_names - keys), "log event names")
-    resource = need(re.findall(r'KeyValue::new\(\s*"([^"]+)"', body(tel, "resource")), "resource attributes")
-    # What Thurbox adds to OTEL_RESOURCE_ATTRIBUTES of every agent it launches.
-    launch = src["launch"].split("#[cfg(test)]")[0]
-    agent_resource = need(re.findall(r'\(\s*"(thurbox\.[\w.]+)",\s*[^)]', launch), "agent resource attributes")
+    programs = src["cli"] + src["runtime_mux"] + src["workspace_git"]
+    span_names = need(
+        re.findall(r'Current::start\(\s*"([^"]+)"', src["manager"])
+        + formatted(src["manager"]) + formatted(src["runtime"])
+        + [n for n in formatted(programs) if re.fullmatch(r"fleet \{name\}|(runtime-mux|workspace-git) .+", n)],
+        "span names",
+    )
+    span_attrs = need(keys(src["manager"]) + keys(src["runtime"]) + keys(programs), "span attributes")
+    agent = body(src["harness"], "telemetry")
     return {
-        "thurbox": {"repository": "https://github.com/Thurbeen/thurbox", "tag": tag},
+        "fleet": {"repository": REPOSITORY, "tag": tag},
         "metrics": metrics,
-        # With per_session = true, every metric also carries this attribute.
-        "per_session_attribute": "thurbox.session.id",
-        "logs": {"events": events, "attributes": sorted(keys)},
-        "resource": sorted(resource),
-        "agent_resource": sorted(set(agent_resource)),
+        "spans": {"names": span_names, "attributes": span_attrs},
+        "agent_resource": need(re.findall(r'\(\s*"([\w.]+)",\s*[\w.]+', agent), "agent resource attributes"),
+    }
+
+
+def derive_thurbox(tag: str, src: dict[str, str]) -> dict:
+    """The thurbox interface's own telemetry (ADR-38): no metrics, a client
+    span around each Fleet command it runs, and its WARN-and-above log
+    lines, under service.name thurbox."""
+    tel, link = src["telemetry"], src["link"]
+    if re.search(r"_(counter|gauge|histogram)\(", tel + link):
+        sys.exit("catalog: the thurbox interface builds an instrument; derive its metrics")
+    service = re.search(r'otel_env::init\(\s*"(\w+)"', tel)
+    if not service or not re.search(r'KeyValue::new\("service\.version"', src["otel"]):
+        sys.exit("catalog: the thurbox interface's resource changed shape")
+    return {
+        "thurbox": {"repository": REPOSITORY, "tag": tag},
+        "service": service.group(1),
+        "metrics": [],
+        "spans": {"names": need(formatted(" ".join(re.findall(r"span_builder\((format!\([^)]*\))", link))), "span names"),
+                  "attributes": need(keys(link), "span attributes")},
+        "resource": need(["service.name", "service.version"] + keys(tel), "resource attributes"),
     }
 
 

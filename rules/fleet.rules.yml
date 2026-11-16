@@ -1,4 +1,4 @@
-# Recording and alerting rules for Fleet v2 managers.
+# Recording and alerting rules for Fleet managers (thurbox v3).
 #
 # Every rule groups by `job`, which names one Fleet manager: Prometheus's
 # OTLP receiver sets it to service.namespace/service.name. Fleet exports
@@ -10,7 +10,7 @@ groups:
     rules:
       - record: job_fleet_controller_fleet_outcome:fleet_reconciles:rate5m
         expr: sum by (job, fleet_controller, fleet_outcome) (rate(fleet_reconcile_duration_seconds_count[5m]))
-      # Mean, not a quantile: Fleet v2.4 records the histogram on
+      # Mean, not a quantile: Fleet records the histogram on
       # millisecond-scale default buckets, so bucket quantiles are wrong.
       - record: job_fleet_controller:fleet_reconcile_duration_seconds:mean5m
         expr: |
@@ -129,3 +129,23 @@ groups:
           summary: "Fleet inbox entries on {{ $labels.job }} waited for an hour"
           description: "The inbox depth stayed at {{ $value }} or more for an hour."
           runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetinboxbacklog
+
+      - alert: FleetSessionsLost
+        expr: sum by (job) (fleet_sessions{fleet_session_state="Lost"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} Fleet session(s) on {{ $labels.job }} lost for 5 minutes"
+          description: "The runtime holds the session, but its agent's window is gone, and revives have not brought it back."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleetsessionslost
+
+      - alert: FleetTasksStalled
+        expr: sum by (job) (fleet_tasks{fleet_phase="Stalled"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} Fleet Task(s) on {{ $labels.job }} stalled"
+          description: "Spawn or brief attempts are exhausted. A stalled Task waits for a person."
+          runbook_url: https://github.com/Thurbeen/agent-observability/blob/main/docs/runbook.md#fleettasksstalled
