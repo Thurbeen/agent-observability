@@ -125,15 +125,17 @@ class Fleet:
     def step(self, i: int, t: int) -> tuple[dict, dict]:
         rng, spans = self.rng, []
         trace = secrets.token_hex(16)
+        callees: dict[str, list[dict]] = {"runtime-mux": [], "workspace-git": []}
 
-        def span(name: str, parent: str, start: int, dur_s: float, a: dict, error: bool = False) -> str:
+        def span(name: str, parent: str, start: int, dur_s: float, a: dict, error: bool = False,
+                 into: list[dict] | None = None) -> str:
             sid = rng.randbytes(8).hex()
             s = {"traceId": trace, "spanId": sid, "parentSpanId": parent, "name": name, "kind": 1,
                  "startTimeUnixNano": str(start), "endTimeUnixNano": str(start + int(dur_s * 1e9)),
                  "attributes": attrs(a)}
             if error:
                 s["status"] = {"code": 2, "message": "reconcile failed"}
-            spans.append(s)
+            (spans if into is None else into).append(s)
             return sid
 
         # Two passes a minute; the second one is traced.
@@ -168,9 +170,15 @@ class Fleet:
                     esid = span(f"effect {effect}", sid, offset + 2 * 10**6, d_effect,
                                 {**ident, "fleet.effect": effect, "fleet.outcome": eo}, error=eo == "failed")
                     verb, ro = self.runtime_call(effect, eo, d_effect * 0.8)
-                    span(f"runtime {verb}", esid, offset + 3 * 10**6, d_effect * 0.8,
-                         {"fleet.runtime": "runtime-mux", "fleet.runtime.verb": verb, "fleet.outcome": ro},
-                         error=ro == "unknown")
+                    rsid = span(f"runtime {verb}", esid, offset + 3 * 10**6, d_effect * 0.8,
+                                {"fleet.runtime": "runtime-mux", "fleet.runtime.verb": verb, "fleet.outcome": ro},
+                                error=ro == "unknown")
+                    msid = span(f"runtime-mux {verb}", rsid, offset + 4 * 10**6, d_effect * 0.7,
+                                {"runtime.verb": verb, "runtime.outcome": ro}, error=ro == "unknown",
+                                into=callees["runtime-mux"])
+                    if verb == "start":
+                        span("workspace-git make", msid, offset + 5 * 10**6, d_effect * 0.4,
+                             {"workspace.verb": "make"}, into=callees["workspace-git"])
             offset += int(d * 1e9)
         # Rare outcomes, once each at a fixed point, so any run shows them.
         if i == int(self.steps * 0.5):
@@ -204,7 +212,9 @@ class Fleet:
         metrics["resourceMetrics"] += self.agent_metrics(t)
         self.last = t
         return metrics, {"resourceSpans": [
-            {"resource": self.resource(), "scopeSpans": [{"scope": {"name": "fleet"}, "spans": s}]} for s in traces]}
+            {"resource": self.resource(), "scopeSpans": [{"scope": {"name": "fleet"}, "spans": s}]} for s in traces] + [
+            {"resource": self.resource(service), "scopeSpans": [{"scope": {"name": service}, "spans": s}]}
+            for service, s in callees.items() if s]}
 
     def forge_outcome(self, i: int, host: str) -> str:
         r = self.rng.random()
@@ -318,8 +328,8 @@ class Fleet:
             states[pick(self.states, state)] += 1
         return phases, states
 
-    def resource(self) -> dict:
-        return {"attributes": attrs({"service.name": "fleet", "service.version": self.version})}
+    def resource(self, service: str = "fleet") -> dict:
+        return {"attributes": attrs({"service.name": service, "service.version": self.version})}
 
     def metrics(self, t: int) -> dict:
         start, now = str(self.start), str(t)

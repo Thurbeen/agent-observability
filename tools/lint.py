@@ -10,7 +10,8 @@
                                                # `promtool check rules`
 
 A query may name only a metric, label, label value, span name, span
-attribute or log event that a catalog in catalog/ lists.
+attribute or log event that a catalog in catalog/ lists, and every span a
+catalog lists has a dashboard query.
 Panels reach data sources through the dashboard's template variables only.
 Each alert has a severity, a summary and a runbook section.
 """
@@ -93,6 +94,18 @@ def check_logql(where: str, expr: str, cat: Catalog) -> None:
             problem(where, f"{label} is not a log attribute a catalog lists")
 
 
+def span_name_patterns(query: str) -> list[str]:
+    return [value if "~" in op else re.escape(value)
+            for op, value in re.findall(r"(?<![\w.])name\s*(=~|=)\s*\"([^\"]+)\"", query)]
+
+
+def check_span_coverage(cat: Catalog, queries: list[str]) -> None:
+    patterns = [pattern for q in queries for pattern in span_name_patterns(q)]
+    for example in cat.span_examples:
+        if not any(re.fullmatch(pattern, example) for pattern in patterns):
+            problem("dashboards", f'no dashboard queries the span "{example}" a catalog lists')
+
+
 def check_traceql(where: str, query: str, cat: Catalog) -> None:
     for attr in re.findall(r"\bspan\.([\w.]+)", query):
         if attr not in cat.span_attrs:
@@ -110,7 +123,7 @@ def panels(items: list[dict]):
 
 
 def check_dashboards(cat: Catalog, recorded: set[str]) -> list[str]:
-    exprs, uids = [], set()
+    exprs, traceqls, uids = [], [], set()
     files = sorted((ROOT / "dashboards").glob("*/*.json"))
     if not files:
         problem("dashboards", "no dashboards found")
@@ -149,6 +162,8 @@ def check_dashboards(cat: Catalog, recorded: set[str]) -> list[str]:
                     exprs.append(t["expr"])
                 if t.get("queryType") == "traceql":
                     check_traceql(name, t["query"], cat)
+                    traceqls.append(t["query"])
+    check_span_coverage(cat, traceqls)
     return exprs
 
 
