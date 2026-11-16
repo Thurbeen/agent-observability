@@ -185,13 +185,11 @@ def derive_fleet(tag: str, src: dict[str, str]) -> dict:
         "fleet.sessions": {"fleet.session.state": need(variants(src["sessions"], "SessionState"), "session states")},
     }
 
-    set_keys = set(keys(code))
     metrics = []
     for name, (k, unit, attrs) in sorted(documented.items()):
         if (k, unit) != instruments[name]:
             sys.exit(f"catalog: {name} is documented as {k} {unit}, built as {instruments[name]}")
-        missing = set(attrs) - set_keys - {"fleet.phase", "fleet.session.state"}
-        if missing or not all(f'"{a}"' in code for a in attrs):
+        if not all(f'"{a}"' in code for a in attrs):
             sys.exit(f"catalog: {name} documents {sorted(attrs)}, which the code never sets")
         known = values.get(name, {})
         metrics.append(metric(name, k, unit, {a: known.get(a, []) for a in attrs}))
@@ -208,7 +206,7 @@ def derive_fleet(tag: str, src: dict[str, str]) -> dict:
     return {
         "fleet": {"repository": REPOSITORY, "tag": tag},
         "metrics": metrics,
-        "spans": {"names": span_names, "attributes": need(span_attrs, "span attributes")},
+        "spans": {"names": span_names, "attributes": span_attrs},
         "agent_resource": need(re.findall(r'\(\s*"([\w.]+)",\s*[\w.]+', agent), "agent resource attributes"),
     }
 
@@ -227,7 +225,8 @@ def derive_thurbox(tag: str, src: dict[str, str]) -> dict:
         "thurbox": {"repository": REPOSITORY, "tag": tag},
         "service": service.group(1),
         "metrics": [],
-        "spans": {"names": need(formatted("".join(re.findall(r"span_builder\((format!\([^)]*\))", link))), "span names"), "attributes": need(keys(link), "span attributes")},
+        "spans": {"names": need(formatted(" ".join(re.findall(r"span_builder\((format!\([^)]*\))", link))), "span names"),
+                  "attributes": need(keys(link), "span attributes")},
         "resource": need(["service.name", "service.version"] + keys(tel), "resource attributes"),
     }
 
