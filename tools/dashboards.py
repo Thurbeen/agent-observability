@@ -406,6 +406,16 @@ def traces() -> dict:
     b.add(metrics("Reconcile pass p50 / p95",
                   f'{{ {svc} && name = "reconcile pass" }} | quantile_over_time(duration, .5, .95)',
                   "Quantiles of one whole pass over every kind.", "s"), 12, 8)
+    b.row("Runtime calls")
+    b.add(metrics("Runtime call p50 / p95 by verb",
+                  f'{{ {svc} && name =~ "runtime .+" }} | quantile_over_time(duration, .5, .95) by (span.fleet.runtime.verb)',
+                  "Each runtime protocol call as Fleet sees it, from the spawn of the runtime to its answer.", "s"), 8, 8)
+    b.add(metrics("runtime-mux p50 / p95 by verb",
+                  '{ name =~ "runtime-mux .+" } | quantile_over_time(duration, .5, .95) by (span.runtime.verb)',
+                  "The same calls inside runtime-mux, in the trace of the Task that made them.", "s"), 8, 8)
+    b.add(metrics("workspace-git p50 / p95 by verb",
+                  '{ name =~ "workspace-git .+" } | quantile_over_time(duration, .5, .95) by (span.workspace.verb)',
+                  "The workspaces runtime-mux makes, inspects and releases for a Task.", "s"), 8, 8)
     b.row("Find a trace")
     b.add(search("Object reconciles", f"{{ {reconciles} && {obj} }}",
                  "One reconcile of a Fleet object. Set Object to a Task or ChangeRequest name."), 12, 9)

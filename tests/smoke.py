@@ -125,6 +125,10 @@ def main() -> None:
           lambda: (lambda r: (r[0] == 200 and bool(r[1].get("traces")), r))(
               query(TEMPO, "/api/search", q='{ name =~ "effect .+" }', **recent)),
           deadline)
+    until("Tempo search finds runtime-mux's spans",
+          lambda: (lambda r: (r[0] == 200 and bool(r[1].get("traces")), r))(
+              query(TEMPO, "/api/search", q='{ name =~ "runtime-mux .+" }', **recent)),
+          deadline)
     until("Tempo search finds the interface's fleet command spans",
           lambda: (lambda r: (r[0] == 200 and bool(r[1].get("traces")), r))(
               query(TEMPO, "/api/search", q='{ resource.service.name = "thurbox" && name =~ "fleet .+" }', **recent)),

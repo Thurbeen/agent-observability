@@ -31,7 +31,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 fleet up
 | **Fleet overview** | Tasks by phase, sessions by state, reconciles, errors, effects and runtime calls. |
 | **Fleet forge polling** | ChangeRequest polls per forge host: answers, throttles and failures. |
 | **Fleet Gateway and inbox** | Inbox depth, deliveries and the Gateway controllers. |
-| **Fleet traces** | Reconcile p50/p95 from spans, and trace search by object, effect and error. |
+| **Fleet traces** | Reconcile p50/p95 from spans, runtime call p50/p95 as Fleet, `runtime-mux` and `workspace-git` see them, and trace search by object, effect and error. |
 
 | | |
 | --- | --- |

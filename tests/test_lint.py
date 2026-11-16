@@ -97,6 +97,24 @@ class TraceQL(unittest.TestCase):
         self.assertEqual(traceql('{ name =~ "runtime-mux .+" && span.runtime.outcome = "unknown" }'), [])
 
 
+class SpanCoverage(unittest.TestCase):
+    def uncovered(self, *queries: str) -> list[str]:
+        lint.problems.clear()
+        lint.check_span_coverage(CATALOG, list(queries))
+        return list(lint.problems)
+
+    def test_names_each_span_no_dashboard_queries(self):
+        problems = self.uncovered('{ name = "forge poll" }')
+        self.assertIn('dashboards: no dashboard queries the span "runtime-mux X" a catalog lists', problems)
+        self.assertNotIn('dashboards: no dashboard queries the span "forge poll" a catalog lists', problems)
+
+    def test_a_regex_on_the_name_covers_its_spans(self):
+        problems = self.uncovered('{ name =~ "runtime .+" }', '{ name =~ "workspace-git .+" }')
+        self.assertNotIn('dashboards: no dashboard queries the span "runtime X" a catalog lists', problems)
+        self.assertNotIn('dashboards: no dashboard queries the span "workspace-git X" a catalog lists', problems)
+        self.assertIn('dashboards: no dashboard queries the span "runtime-mux X" a catalog lists', problems)
+
+
 class Repository(unittest.TestCase):
     def test_repository_is_clean(self):
         lint.problems.clear()
